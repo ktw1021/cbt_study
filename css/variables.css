@@ -1,0 +1,18 @@
+:root {
+  --bg: #f3f6fb;
+  --panel: #fff;
+  --primary: #2563eb;
+  --soft: #f8fbff;
+  --line: #dbe4ef;
+  --text: #1f2937;
+  --muted: #667085;
+  --blue: #2563eb;
+  --green: #16a34a;
+  --green-soft: #f0fdf4;
+  --red: #dc2626;
+  --red-soft: #fef2f2;
+  --amber: #d97706;
+  --pink: #ec4899;
+  --pink-soft: #fce7f3;
+  --shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
+}
