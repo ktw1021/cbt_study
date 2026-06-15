@@ -11,6 +11,7 @@ import { getCard } from './domain/queries.js';
 import { showAuthOverlay, renderAuthUserLists, setAuthTab, showAuthMessage } from './ui/auth.js';
 import { formatProblemHtml } from './ui/prompt.js';
 import * as actions from './app/actions.js';
+import { chipRemoveEl } from './ui/chip-editor.js';
 import { closeModal } from './ui/modal.js';
 
 /** hash → 화면 (뒤로가기) */
@@ -106,6 +107,8 @@ function bindEvents() {
   document.addEventListener('change', onChange);
   document.addEventListener('input', onInput);
   document.addEventListener('keydown', onKeydown);
+  document.addEventListener('mouseover', actions.handleBlankPeekOver);
+  document.addEventListener('mouseout', actions.handleBlankPeekOut);
 
   document.getElementById('folderTree').addEventListener('dragover', (e) => {
     const node = e.target.closest('[data-folder-id]');
@@ -146,6 +149,13 @@ function runAuthAction(fn) {
 }
 
 function onClick(e) {
+  const chipX = e.target.closest('.cz-chip-x');
+  if (chipX) {
+    e.preventDefault();
+    chipRemoveEl(chipX.closest('.cz-chip'));
+    return;
+  }
+
   const btn = e.target.closest('[data-action]');
   if (!btn) return;
   const action = btn.dataset.action;
@@ -171,8 +181,8 @@ function onClick(e) {
     'delete-user': () => actions.deleteUser(),
     'select-all': () => actions.selectFiltered(true),
     'deselect-all': () => actions.selectFiltered(false),
-    'delete-sample': () => actions.deleteSampleData(),
     'new-card': () => actions.startNewCard(),
+    'pick-flag': () => actions.pickCardFlag(Number(btn.dataset.flag)),
     'save-card': () => actions.saveCard(),
     'delete-card-form': () => actions.deleteCurrentCard(),
     'make-blank': () => actions.makeBlankFromSelection(btn.dataset.editor),
@@ -235,8 +245,8 @@ function onInput(e) {
     document.getElementById('promptPreview').innerHTML = formatProblemHtml(e.target.value);
     return;
   }
-  if (e.target.id === 'explanationTemplate' || e.target.matches('[data-answer-key]')) actions.onCreateInput();
-  if (e.target.id === 'studyEditExplanation' || e.target.matches('[data-study-answer-key]')) actions.renderStudyEditPreview();
+  if (e.target.id === 'explanationTemplate') { actions.onCreateInput(); return; }
+  if (e.target.id === 'studyEditExplanation') { actions.onStudyEditInput(); return; }
   if (e.target.matches('input.blank-field')) {
     const n = Math.max(e.target.placeholder?.length || 0, e.target.value.length, 1);
     e.target.style.width = `${n}em`;
@@ -246,7 +256,6 @@ function onInput(e) {
 
 function onKeydown(e) {
   const active = document.activeElement;
-  const isText = active && (active.tagName === 'TEXTAREA' || (active.tagName === 'INPUT' && active.type === 'text'));
   const isBlankField = active?.matches?.('[data-blank-order]');
 
   if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'z') {
@@ -255,12 +264,12 @@ function onKeydown(e) {
     return;
   }
 
-  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'b' && isText && active.selectionStart !== active.selectionEnd) {
-    if (active.id === 'explanationTemplate' || active.id === 'studyEditExplanation') {
+  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'b') {
+    if (active?.classList?.contains('chip-editor')) {
       e.preventDefault();
       actions.makeBlankFromSelection(active.id);
+      return;
     }
-    return;
   }
 
   if (e.ctrlKey && !e.altKey && !e.shiftKey && /^[0-7]$/.test(e.key)) {
@@ -287,10 +296,6 @@ function onKeydown(e) {
     }
   }
 
-  if (store.currentSection.startsWith('study') && e.key === 'Enter' && !e.shiftKey && active?.tagName === 'TEXTAREA') {
-    e.preventDefault();
-    actions.gradeCurrent();
-  }
 }
 
 init();

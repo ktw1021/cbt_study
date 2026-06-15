@@ -85,34 +85,37 @@ export function renderManageDetail(id) {
 
   const box = document.getElementById('manageDetail');
   if (!id) {
-    box.textContent = '카드를 선택하세요.';
+    box.innerHTML = '<div class="detail-empty">카드를 선택하세요.</div>';
     return;
   }
 
   const c = getCard(id);
   if (!c) {
-    box.textContent = '카드를 찾을 수 없습니다.';
+    box.innerHTML = '<div class="detail-empty">카드를 찾을 수 없습니다.</div>';
     return;
   }
 
   const opts = buildFolderOptions(getActiveUser().id);
-  box.innerHTML = `<div class="col">
-    <div><strong>${escapeHtml(c.title)}</strong> <span class="flag flag-${c.flagColor}"></span></div>
-    <div class="caption">${escapeHtml(folderPathNames(c.folderId))} · 회독 ${c.rounds} · 오답 ${c.wrongCount}</div>
-    <div><strong>문제</strong><br>${formatProblemHtml(c.displayText)}</div>
-    <div><strong>해설</strong><br>${formatPromptHtml(c.explanationText || '', c.blanks || [])}</div>
-    <div><strong>정답</strong><br>${c.blanks.map((b) => `빈칸${b.order}: ${escapeHtml(b.answer)}`).join('<br>') || '없음'}</div>
-    <div><strong>메모</strong><br>${escapeHtml(c.memo || '(없음)')}</div>
-    <label>폴더 이동</label>
-    <select data-action="move-card-folder" data-card-id="${c.id}">
-      <option value="">(미분류)</option>${opts}
-    </select>
-    <div class="toolbar">
+  box.innerHTML = `
+    <div class="detail-body">
+      <div class="col">
+        <div><strong>${escapeHtml(c.title)}</strong> <span class="flag flag-${c.flagColor}"></span></div>
+        <div class="caption">${escapeHtml(folderPathNames(c.folderId))} · 회독 ${c.rounds} · 오답 ${c.wrongCount}</div>
+        <div><strong>문제</strong><br>${formatProblemHtml(c.displayText)}</div>
+        <div><strong>해설</strong><br>${formatPromptHtml(c.explanationText || '', c.blanks || [])}</div>
+        <div><strong>정답</strong><br>${c.blanks.map((b) => `빈칸${b.order}: ${escapeHtml(b.answer)}`).join('<br>') || '없음'}</div>
+        <div><strong>메모</strong><br>${escapeHtml(c.memo || '(없음)')}</div>
+        <label>폴더 이동</label>
+        <select data-action="move-card-folder" data-card-id="${c.id}">
+          <option value="">(미분류)</option>${opts}
+        </select>
+      </div>
+    </div>
+    <div class="detail-actions">
       <button class="primary" data-action="edit-card" data-id="${c.id}">수정하기</button>
       <button class="pink" data-action="study-one" data-id="${c.id}">바로 학습</button>
       <button class="danger" data-action="delete-card" data-id="${c.id}">삭제</button>
-    </div>
-  </div>`;
+    </div>`;
 
   const sel = box.querySelector('[data-action="move-card-folder"]');
   if (sel) sel.value = c.folderId || '';

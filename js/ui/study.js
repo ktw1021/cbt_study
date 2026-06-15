@@ -79,26 +79,87 @@ export function paintInlineBlanks(statuses) {
   });
 }
 
+/** DOM 입력값 → 모델 흡수 (단일 출처 유지). 미채점 칸만 반영, 채점된 칸은 확정값 보존 */
+export function syncDraftFromDOM() {
+  store.currentBlankStatuses.forEach((s) => {
+    if (s.checked) return;
+    const input = document.querySelector(`[data-blank-order="${s.order}"]`);
+    if (input) s.user = input.value;
+  });
+}
+
 export function refreshStudyViews() {
   const c = store.studyQueue[store.studyIndex];
   if (!c) return;
+  syncDraftFromDOM();
   document.getElementById('studyPrompt').innerHTML = formatProblemHtml(c.displayText);
   document.getElementById('studyExplanation').innerHTML = formatStudyExplanationHtml(c, store.currentBlankStatuses);
   paintInlineBlanks(store.currentBlankStatuses);
 }
 
+/** 빈칸 이동 — 입력 보존을 위해 패널을 재생성하지 않고 포커스·하이라이트만 갱신 */
 export function focusBlankUI(order) {
+  syncDraftFromDOM();
   store.currentBlankFocus = order;
   const input = document.querySelector(`[data-blank-order="${order}"]`);
   if (input) {
     input.focus();
     input.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
-  refreshStudyViews();
+  paintInlineBlanks(store.currentBlankStatuses);
 }
 
 export function getBlankInputValue(order) {
   return document.querySelector(`[data-blank-order="${order}"]`)?.value?.trim() || '';
+}
+
+// ── 호버 정답 엿보기 (모를 때 잠깐 보기) ──
+let peekShowTimer = null;
+let peekHideTimer = null;
+let peekEl = null;
+
+function ensurePeekEl() {
+  if (peekEl) return peekEl;
+  peekEl = document.createElement('div');
+  peekEl.className = 'blank-peek';
+  document.body.appendChild(peekEl);
+  return peekEl;
+}
+
+function hidePeek() {
+  clearTimeout(peekShowTimer);
+  clearTimeout(peekHideTimer);
+  if (peekEl) peekEl.classList.remove('show');
+}
+
+/** 빈칸 위 1초 호버 → 정답 잠깐 표시 후 사라짐 (미채점 칸만) */
+export function handleBlankPeekOver(e) {
+  const input = e.target.closest?.('.blank-field');
+  if (!input) return;
+  const order = Number(input.dataset.blankOrder);
+  const st = store.currentBlankStatuses.find((s) => s.order === order);
+  if (st && st.checked) return;
+  const c = store.studyQueue[store.studyIndex];
+  const blank = c?.blanks.find((b) => b.order === order);
+  const answer = splitAnswers(blank?.answer)[0] || '';
+  if (!answer) return;
+
+  clearTimeout(peekShowTimer);
+  clearTimeout(peekHideTimer);
+  peekShowTimer = setTimeout(() => {
+    const el = ensurePeekEl();
+    el.textContent = answer;
+    const r = input.getBoundingClientRect();
+    el.style.left = `${r.left + window.scrollX}px`;
+    el.style.top = `${r.top + window.scrollY - 34}px`;
+    el.classList.add('show');
+    peekHideTimer = setTimeout(() => el.classList.remove('show'), 500);
+  }, 1500);
+}
+
+export function handleBlankPeekOut(e) {
+  if (!e.target.closest?.('.blank-field')) return;
+  hidePeek();
 }
 
 /** @deprecated — 인라인 방식으로 대체 */

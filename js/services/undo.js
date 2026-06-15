@@ -14,6 +14,11 @@ export function pushUndo() {
   if (undoStack.length > MAX_UNDO) undoStack.shift();
 }
 
+/** 되돌릴 스냅샷이 있는지 */
+export function hasUndo() {
+  return undoStack.length > 0;
+}
+
 /** 마지막 스냅샷으로 복원 */
 export async function undo() {
   if (!undoStack.length) {

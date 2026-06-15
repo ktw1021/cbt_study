@@ -104,7 +104,6 @@
       <div class="stat"><div class="k">전체 카드</div><div class="v" id="statTotal">0</div></div>
       <div class="stat"><div class="k">선택 카드</div><div class="v" id="statSelected">0</div></div>
       <div class="stat"><div class="k">회독 합계</div><div class="v" id="statRounds">0</div></div>
-      <div class="stat"><div class="k">샘플 데이터</div><div class="v" style="font-size:14px"><button class="small danger" data-action="delete-sample">삭제</button></div></div>
     </div>
 
     <section id="manageSection" class="panel">
@@ -127,7 +126,7 @@
           </div>
           <div id="cardList" class="list" style="margin-top:10px"></div>
         </div>
-        <div id="manageDetail" class="preview preview-scroll preview-tall">카드를 선택하세요.</div>
+        <div id="manageDetail" class="manage-detail"><div class="detail-empty">카드를 선택하세요.</div></div>
       </div>
     </section>
 
@@ -144,12 +143,18 @@
       <div class="row" style="margin-top:12px">
         <div style="flex:2"><label>제목</label><input id="cardTitle" type="text" placeholder="카드 제목" /></div>
         <div style="flex:2"><label>폴더</label><select id="cardFolder"></select></div>
-        <div style="width:120px"><label>플래그</label>
-          <select id="cardFlag">
-            <option value="0">없음</option>
-            <option value="1">1 빨강</option><option value="2">2 주황</option><option value="3">3 노랑</option>
-            <option value="4">4 초록</option><option value="5">5 청록</option><option value="6">6 파랑</option><option value="7">7 보라</option>
-          </select>
+        <div style="flex:1.2"><label>플래그</label>
+          <input type="hidden" id="cardFlag" value="0" />
+          <div id="cardFlagPicker" class="flag-picker">
+            <button type="button" class="flag-pick" data-action="pick-flag" data-flag="0" title="없음"><span class="flag flag-0"></span></button>
+            <button type="button" class="flag-pick" data-action="pick-flag" data-flag="1" title="빨강"><span class="flag flag-1"></span></button>
+            <button type="button" class="flag-pick" data-action="pick-flag" data-flag="2" title="주황"><span class="flag flag-2"></span></button>
+            <button type="button" class="flag-pick" data-action="pick-flag" data-flag="3" title="노랑"><span class="flag flag-3"></span></button>
+            <button type="button" class="flag-pick" data-action="pick-flag" data-flag="4" title="초록"><span class="flag flag-4"></span></button>
+            <button type="button" class="flag-pick" data-action="pick-flag" data-flag="5" title="청록"><span class="flag flag-5"></span></button>
+            <button type="button" class="flag-pick" data-action="pick-flag" data-flag="6" title="파랑"><span class="flag flag-6"></span></button>
+            <button type="button" class="flag-pick" data-action="pick-flag" data-flag="7" title="보라"><span class="flag flag-7"></span></button>
+          </div>
         </div>
       </div>
       <div class="create-split">
@@ -163,7 +168,7 @@
         <div class="create-panel">
           <div class="create-panel-head explanation">해설</div>
           <label>해설 (암기할 문장 · 빈칸은 여기만)</label>
-          <textarea id="explanationTemplate" class="xl create-input" placeholder="해설·요지·암기 문장. 단어 드래그 → Ctrl+B 또는 아래 버튼"></textarea>
+          <div id="explanationTemplate" class="xl create-input chip-editor" contenteditable="true" data-placeholder="해설·요지·암기 문장. 단어 드래그 → Ctrl+B 또는 아래 버튼"></div>
           <div class="toolbar blank-toolbar">
             <button class="secondary" type="button" data-action="make-blank" data-editor="explanationTemplate">선택 → 빈칸 (Ctrl+B)</button>
             <button class="ghost" type="button" data-action="remove-blank" data-editor="explanationTemplate">빈칸 해제</button>
@@ -271,7 +276,7 @@
           </div>
           <div class="col">
             <label>해설 (Ctrl+B 빈칸)</label>
-            <textarea id="studyEditExplanation" class="xl"></textarea>
+            <div id="studyEditExplanation" class="xl chip-editor" contenteditable="true" data-placeholder="해설·암기 문장. 단어 드래그 → Ctrl+B"></div>
             <div class="toolbar blank-toolbar">
               <button class="secondary small" data-action="make-blank" data-editor="studyEditExplanation">선택 → 빈칸</button>
               <button class="ghost small" data-action="remove-blank" data-editor="studyEditExplanation">빈칸 해제</button>

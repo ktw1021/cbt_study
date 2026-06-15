@@ -4,7 +4,6 @@
 import { getState, store, setState } from '../core/store.js';
 import { persist, saveState } from '../core/storage.js';
 import { uid, shuffle, stripBlankMarkers } from '../utils/text.js';
-import { selectionRange, captureTextareaView } from '../utils/dom.js';
 import { migrateCard } from '../domain/migrate.js';
 import {
   getActiveUser,
@@ -19,16 +18,8 @@ import {
   findUserByName,
   normalizeUserName,
 } from '../domain/queries.js';
-import {
-  makeBlankInText,
-  removeBlankFromText,
-  removeBlankAtOrder,
-  findBlankTokenAtCursor,
-  selectBlankToken,
-  applyAutoBlankTokens,
-  findAutoCandidates,
-} from '../domain/blank.js';
-import { pushUndo, undo } from '../services/undo.js';
+import { findAutoCandidates } from '../domain/blank.js';
+import { pushUndo, undo, hasUndo } from '../services/undo.js';
 import { checkAnswer } from '../services/grading.js';
 import { exportData, importFromFile } from '../services/import-export.js';
 import { splitAnswers } from '../utils/text.js';
@@ -40,18 +31,29 @@ import {
 } from '../ui/render.js';
 import {
   readCreateForm,
-  readBlanksFromEditor,
-  refreshEditorUI,
   renderCreatePreview,
   renderStudyEditPreview,
   renderStudyEditForm,
+  syncCardFlagPicker,
 } from '../ui/create.js';
+import {
+  chipMakeBlank,
+  chipRemoveAtCaret,
+  chipRemoveByOrder,
+  chipJump,
+  chipApplyTokens,
+  readChipEditor,
+  readChipPlainText,
+} from '../ui/chip-editor.js';
 import {
   paintInlineBlanks,
   refreshStudyViews,
   focusBlankUI,
   getBlankInputValue,
   renderStudyCard,
+  syncDraftFromDOM,
+  handleBlankPeekOver,
+  handleBlankPeekOut,
 } from '../ui/study.js';
 import { openAutoBlankModal, closeModal, getSelectedAutoTokens } from '../ui/modal.js';
 import { readFilters } from '../ui/sidebar.js';
@@ -357,9 +359,11 @@ export function editCard(id) {
 }
 
 export async function saveCard() {
-  const draft = readCreateForm(getCard(document.getElementById('cardId').value)?.blanks || []);
+  const draft = readCreateForm();
   if (!draft.displayText.trim()) return alert('문제를 입력하세요.');
   if (!draft.explanationText.trim()) return alert('해설을 입력하세요.');
+  const emptyAnswer = draft.blanks.find((b) => !String(b.answer).trim());
+  if (emptyAnswer) return alert(`빈칸 ${emptyAnswer.order}의 정답이 비어 있습니다. 아래 "빈칸별 정답"을 채우거나 해당 빈칸을 해제하세요.`);
   pushUndo();
   const state = getState();
   const now = new Date().toISOString();
@@ -437,87 +441,33 @@ export async function selectFiltered(all) {
   renderAll();
 }
 
-export async function deleteSampleData() {
-  const samples = getState().cards.filter((c) => c.isSample && c.userId === getActiveUser().id);
-  if (!samples.length) return alert('삭제할 샘플 데이터가 없습니다.');
-  if (!confirm(`샘플 카드 ${samples.length}개를 삭제할까요?`)) return;
-  pushUndo();
-  const ids = samples.map((c) => c.id);
-  getState().cards = getState().cards.filter((c) => !ids.includes(c.id));
-  getState().selectedIds = getState().selectedIds.filter((x) => !ids.includes(x));
-  await saveState();
-  renderAll();
-}
-
 // ── 빈칸 ──
 
 export function makeBlankFromSelection(editorId) {
-  const el = document.getElementById(editorId);
-  const { start, end, text } = selectionRange(el);
-  if (!text.trim()) return alert('빈칸으로 만들 단어·구절을 드래그로 선택하세요.');
-  pushUndo();
-  const cardId = document.getElementById('cardId').value || store.studyQueue[store.studyIndex]?.id || '';
-  const synced = readBlanksFromEditor(editorId, cardId, getCard(cardId)?.blanks || []);
-  const norm = makeBlankInText(synced.template, synced.blanks, start, end, text);
-  refreshEditorUI(editorId, norm, norm.caret);
+  chipMakeBlank(editorId);
 }
 
 export function removeBlankFromSelection(editorId) {
-  const el = document.getElementById(editorId);
-  const { start, end, text } = selectionRange(el);
-  let order = null;
-  let rangeStart = start;
-  let rangeEnd = end;
-
-  const tokenMatch = String(text).match(/\[\[BLANK(\d+)\]\]/);
-  if (tokenMatch) {
-    order = Number(tokenMatch[1]);
-  } else {
-    const atCursor = findBlankTokenAtCursor(el.value, start)
-      ?? (start !== end ? findBlankTokenAtCursor(el.value, end) : null);
-    if (atCursor) {
-      order = atCursor.order;
-      rangeStart = atCursor.start;
-      rangeEnd = atCursor.end;
-    }
-  }
-
-  if (!order) {
-    return alert('해제할 [[BLANK1]] 토큰을 선택하거나, 커서를 토큰 안에 두세요. 목록의 × 버튼도 사용할 수 있습니다.');
-  }
-
-  pushUndo();
-  const cardId = document.getElementById('cardId').value || store.studyQueue[store.studyIndex]?.id || '';
-  const synced = readBlanksFromEditor(editorId, cardId, getCard(cardId)?.blanks || []);
-  const norm = removeBlankFromText(synced.template, synced.blanks, rangeStart, rangeEnd, order);
-  refreshEditorUI(editorId, norm, norm.caret);
+  chipRemoveAtCaret(editorId);
 }
 
 export function removeBlankByOrder(editorId, order) {
   if (!order) return;
-  pushUndo();
-  const el = document.getElementById(editorId);
-  const cardId = document.getElementById('cardId').value || store.studyQueue[store.studyIndex]?.id || '';
-  const synced = readBlanksFromEditor(editorId, cardId, getCard(cardId)?.blanks || []);
-  const norm = removeBlankAtOrder(synced.template, synced.blanks, order);
-  refreshEditorUI(editorId, norm, norm.caret);
+  chipRemoveByOrder(editorId, order);
 }
 
 export function jumpToBlank(editorId, order) {
-  const el = document.getElementById(editorId);
-  if (!selectBlankToken(el, order)) {
-    alert(`빈칸 ${order} 토큰을 해설에서 찾지 못했습니다.`);
+  if (!chipJump(editorId, order)) {
+    alert(`빈칸 ${order}을(를) 해설에서 찾지 못했습니다.`);
   }
 }
 
 export function openAutoBlank(editorId) {
   store.autoBlankEditorId = editorId;
-  const el = document.getElementById(editorId);
-  if (!el.value.trim()) return alert('원문을 먼저 입력하세요.');
-  const cardId = document.getElementById('cardId').value || store.studyQueue[store.studyIndex]?.id || '';
-  const synced = readBlanksFromEditor(editorId, cardId, getCard(cardId)?.blanks || []);
-  const plain = synced.template.replace(/\[\[BLANK\d+\]\]/g, ' ');
-  const candidates = findAutoCandidates(plain, synced.blanks);
+  const plain = readChipPlainText(editorId);
+  if (!plain.trim()) return alert('해설을 먼저 입력하세요.');
+  const { blanks } = readChipEditor(editorId);
+  const candidates = findAutoCandidates(plain, blanks);
   if (!candidates.length) return alert('자동 빈칸 후보를 찾지 못했습니다.');
   openAutoBlankModal(candidates, applyAutoBlank);
 }
@@ -526,31 +476,20 @@ export function applyAutoBlank() {
   const editorId = store.autoBlankEditorId;
   const tokens = getSelectedAutoTokens();
   if (!tokens.length) return alert('선택된 후보가 없습니다.');
-  pushUndo();
-  const el = document.getElementById(editorId);
-  const view = captureTextareaView(el);
-  const cardId = document.getElementById('cardId').value || store.studyQueue[store.studyIndex]?.id || '';
-  const synced = readBlanksFromEditor(editorId, cardId, getCard(cardId)?.blanks || []);
-  const norm = applyAutoBlankTokens(synced.template, synced.blanks, tokens);
-  refreshEditorUI(editorId, norm, { start: view.start, end: view.end });
+  chipApplyTokens(editorId, tokens);
   closeModal();
   alert(`${tokens.length}개 빈칸을 적용했습니다.`);
 }
 
 /** 자동 빈칸 — 상위 N개 즉시 적용 (모달 없음) */
 export function applyQuickAutoBlank(editorId, limit = 5) {
-  const el = document.getElementById(editorId);
-  if (!el?.value.trim()) return alert('해설을 먼저 입력하세요.');
-  const view = captureTextareaView(el);
-  const cardId = document.getElementById('cardId').value || store.studyQueue[store.studyIndex]?.id || '';
-  const synced = readBlanksFromEditor(editorId, cardId, getCard(cardId)?.blanks || []);
-  const plain = synced.template.replace(/\[\[BLANK\d+\]\]/g, ' ');
-  const candidates = findAutoCandidates(plain, synced.blanks);
+  const plain = readChipPlainText(editorId);
+  if (!plain.trim()) return alert('해설을 먼저 입력하세요.');
+  const { blanks } = readChipEditor(editorId);
+  const candidates = findAutoCandidates(plain, blanks);
   if (!candidates.length) return alert('자동 빈칸 후보를 찾지 못했습니다. (2자 미만·숫자·조항·불용어 제외)');
   const tokens = candidates.slice(0, limit).map(([t]) => t);
-  pushUndo();
-  const norm = applyAutoBlankTokens(synced.template, synced.blanks, tokens);
-  refreshEditorUI(editorId, norm, { start: view.start, end: view.end });
+  chipApplyTokens(editorId, tokens);
   alert(`추천 ${tokens.length}개를 빈칸으로 만들었습니다: ${tokens.join(', ')}`);
 }
 
@@ -628,6 +567,7 @@ export function studyOne(id) {
 export async function gradeBlankOnEnter(order) {
   const c = store.studyQueue[store.studyIndex];
   if (!c) return;
+  syncDraftFromDOM();
   const user = getBlankInputValue(order);
   if (!user) return;
 
@@ -766,17 +706,16 @@ export async function saveStudyMemo() {
 export async function saveStudyEdits() {
   const c = store.studyQueue[store.studyIndex];
   if (!c) return;
+  const synced = readChipEditor('studyEditExplanation');
+  const emptyAnswer = synced.blanks.find((b) => !String(b.answer).trim());
+  if (emptyAnswer) return alert(`빈칸 ${emptyAnswer.order}의 정답이 비어 있습니다. 정답을 채우거나 빈칸을 해제하세요.`);
   pushUndo();
-  const synced = readBlanksFromEditor('studyEditExplanation', c.id, c.blanks);
   c.title = document.getElementById('studyEditTitle').value.trim() || c.title;
   c.folderId = document.getElementById('studyEditFolder').value || null;
   c.displayText = stripBlankMarkers(document.getElementById('studyEditPrompt').value);
   c.originalText = c.displayText;
   c.explanationText = synced.template;
-  c.blanks = synced.blanks.map((b) => ({
-    ...b, cardId: c.id,
-    answer: document.querySelector(`[data-study-answer-key="${b.order}"]`)?.value || b.answer,
-  }));
+  c.blanks = synced.blanks.map((b) => ({ ...b, cardId: c.id }));
   c.memo = document.getElementById('studyEditMemo').value;
   c.updatedAt = new Date().toISOString();
   await persist();
@@ -809,6 +748,11 @@ export function nextCard() {
 
 // ── 플래그·Undo·Import/Export ──
 
+/** 카드 제작 폼의 플래그 스와치 선택 */
+export function pickCardFlag(n) {
+  syncCardFlagPicker(n);
+}
+
 export async function applyFlag(n) {
   const c = store.studyQueue[store.studyIndex] || getCard(document.getElementById('cardId').value);
   if (!c) return;
@@ -820,8 +764,16 @@ export async function applyFlag(n) {
 }
 
 export async function undoAppState() {
-  const ok = await undo();
-  if (ok) { renderAll(); renderStudyCard(); alert('되돌리기 완료'); }
+  if (!hasUndo()) {
+    alert('되돌릴 작업이 없습니다.');
+    return;
+  }
+  const ok = confirm(
+    '마지막 데이터 변경(카드·채점·폴더·메모 등)을 되돌릴까요?\n'
+    + '입력 중인 글자 단위 되돌리기(Ctrl+Z)와는 다릅니다.',
+  );
+  if (!ok) return;
+  if (await undo()) { renderAll(); renderStudyCard(); }
 }
 
 export function handleExport(scope) {
@@ -844,10 +796,20 @@ export async function handleImport(file) {
   }
 }
 
+/** 카드 제작 해설 칩 에디터가 바뀜 → 미리보기·정답 슬롯 재구성 */
 export function onCreateInput() {
-  const cardId = document.getElementById('cardId').value;
-  const blanks = getCard(cardId)?.blanks || [];
-  renderCreatePreview(readCreateForm(blanks));
+  const { template, blanks } = readChipEditor('explanationTemplate');
+  renderCreatePreview({
+    displayText: document.getElementById('promptTemplate').value,
+    explanationText: template,
+    blanks,
+  });
+}
+
+/** 학습 중 수정 해설 칩 에디터가 바뀜 → 미리보기·정답 슬롯 재구성 */
+export function onStudyEditInput() {
+  renderStudyEditForm(null, readChipEditor('studyEditExplanation'));
 }
 
 export { focusBlankUI as focusBlank, renderStudyEditPreview };
+export { handleBlankPeekOver, handleBlankPeekOut };

@@ -85,7 +85,10 @@ function syncNavActive(name) {
 /** 데스크톱 — 사이드바 접기/펼치기 */
 export function toggleSidebar() {
   if (isMobileLayout()) return;
-  const collapsed = !store.data.ui.sidebarCollapsed;
+  // 다음 상태는 "현재 화면"을 기준으로 계산한다.
+  // (학습 중 자동 접힘처럼 화면만 접혀 있고 저장값은 펼침일 수 있어,
+  //  저장값 기준으로 계산하면 첫 클릭이 먹통이 된다.)
+  const collapsed = !document.body.classList.contains('sidebar-collapsed');
   store.data.ui.sidebarCollapsed = collapsed;
   document.body.classList.toggle('sidebar-collapsed', collapsed);
   updateSidebarToggleBtn();
