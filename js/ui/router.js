@@ -1,12 +1,68 @@
 import { store } from '../core/store.js';
 import { persist } from '../core/storage.js';
 import { syncUrl } from '../core/hash-router.js';
-import { renderStudyMeta } from './study.js';
+import { renderStudyMeta, renderStudySetup } from './study.js';
+import { readCreateForm } from './create.js';
+import { saveStudySession } from '../services/study-session.js';
+
+/** 카드제작 화면을 떠날 때 — 내용이 있으면 초안 보존, 없으면 비움 */
+function saveCreateDraftOnLeave() {
+  try {
+    const d = readCreateForm();
+    const has = d.displayText.trim() || d.explanationText.trim() || (d.memo || '').trim()
+      || d.blanks.length || d.outline?.items?.length
+      || (d.title && d.title !== '제목 없음');
+    store.data.ui.createDraft = has ? d : null;
+  } catch { /* 폼 미존재 시 무시 */ }
+}
+
+function makeCreateSnapshot(draft) {
+  const d = draft || {};
+  const outline = d.outline?.items?.length ? d.outline : null;
+  return JSON.stringify({
+    id: d.id || '',
+    folderId: d.folderId || null,
+    title: d.title || '',
+    flagColor: Number(d.flagColor) || 0,
+    displayText: d.displayText || '',
+    explanationText: d.explanationText || '',
+    memo: d.memo || '',
+    outline,
+    blanks: (d.blanks || []).map((b) => ({
+      order: Number(b.order) || 0,
+      answer: String(b.answer || ''),
+      aliases: b.aliases || [],
+    })),
+  });
+}
 
 const MOBILE_BP = 900;
 
 export function isMobileLayout() {
   return window.matchMedia(`(max-width: ${MOBILE_BP}px)`).matches;
+}
+
+export function syncSidebarHeightToMain() {
+  if (isMobileLayout()) return;
+  const sidebar = document.querySelector('.sidebar');
+  const main = document.querySelector('main.main');
+  if (!sidebar || !main) return;
+
+  // main이 짧으면 sidebar도 그 높이까지만(넘치면 sidebar 내부 스크롤)
+  // main이 길면 제한 해제(페이지 스크롤로 자연스럽게)
+  const mainH = Math.max(0, Math.floor(main.getBoundingClientRect().height));
+  if (!mainH) return;
+
+  // main이 너무 짧으면(sidebar가 “잘린 듯” 보임) 최소 높이를 보장
+  const MIN_SIDEBAR_H = 720;
+  const limitH = Math.max(mainH, MIN_SIDEBAR_H);
+
+  // sidebar 내부 콘텐츠가 limit를 초과할 때만 제한
+  if (sidebar.scrollHeight > limitH) {
+    sidebar.style.maxHeight = `${limitH}px`;
+  } else {
+    sidebar.style.maxHeight = '';
+  }
 }
 
 /** 학습 중(study-play)만 사이드바 접기 — store에는 저장 안 함 */
@@ -31,26 +87,45 @@ function applyStudyFocusSidebar(prevSection, nextSection) {
 /** 화면 섹션 전환 + URL 동기화 */
 export function showSection(name, { urlExtra = {}, replaceUrl = false, fromHash = false } = {}) {
   const prevSection = store.currentSection;
+  if (prevSection === 'create' && name !== 'create') {
+    // 실제 변경이 있을 때만 경고 (마지막 저장/자동저장/진입 시 스냅샷과 비교)
+    let shouldLeave = true;
+    try {
+      const d = readCreateForm();
+      const snap = makeCreateSnapshot(d);
+      const base = String(store.data.ui.createSavedSnapshot || '');
+      const dirty = base
+        ? snap !== base
+        : !!(d.displayText.trim() || d.explanationText.trim() || (d.memo || '').trim()
+          || d.blanks.length || d.outline?.items?.length
+          || (d.title && d.title !== '제목 없음'));
+      if (dirty && !fromHash) {
+        shouldLeave = confirm('저장하지 않은 변경사항이 있을 수 있습니다.\n이동하면 작성 내용이 바뀌거나 사라질 수 있어요.\n그래도 이동할까요?');
+      }
+    } catch { /* ignore */ }
+    if (!shouldLeave) return;
+    saveCreateDraftOnLeave();
+  }
+  if (prevSection === 'study-play' && name !== 'study-play') saveStudySession();
   store.currentSection = name;
   store.data.ui.section = name.startsWith('study') ? 'study' : name;
 
   const isManage = name === 'manage';
   const isCreate = name === 'create';
   const isStudy = name === 'study' || name === 'study-play';
+  const isPatch = name === 'patch';
 
   document.getElementById('manageSection').classList.toggle('hidden', !isManage);
   document.getElementById('createSection').classList.toggle('hidden', !isCreate);
   document.getElementById('studySection').classList.toggle('hidden', !isStudy);
+  document.getElementById('patchSection').classList.toggle('hidden', !isPatch);
 
   document.body.classList.toggle('study-playing', name === 'study-play' && store.studyQueue.length > 0);
-
-  if (name === 'manage' || name === 'create') {
-    store.data.ui.studySession = null;
-  }
 
   applyStudyFocusSidebar(prevSection, name);
   syncNavActive(name);
   if (isStudy) renderStudyMeta();
+  if (name === 'study') renderStudySetup();
   if (isMobileLayout()) closeMobileMenu();
 
   if (!fromHash) {
@@ -58,6 +133,7 @@ export function showSection(name, { urlExtra = {}, replaceUrl = false, fromHash 
     syncUrl(page, urlExtra, replaceUrl);
   }
   persist();
+  syncSidebarHeightToMain();
 }
 
 function syncNavActive(name) {
@@ -65,7 +141,7 @@ function syncNavActive(name) {
   const isCreate = name === 'create';
   const isStudy = name === 'study' || name === 'study-play';
 
-  document.querySelectorAll('#navManage, #navCreate, #navStudy, .topbar-nav .nav-btn').forEach((el) => {
+  document.querySelectorAll('#navManage, #navCreate, #navStudy, #navPatch, .topbar-nav .nav-btn').forEach((el) => {
     el.classList.remove('active');
   });
 
@@ -73,6 +149,7 @@ function syncNavActive(name) {
   if (isManage) add('navManage');
   if (isCreate) add('navCreate');
   if (isStudy) add('navStudy');
+  if (name === 'patch') add('navPatch');
 
   document.querySelectorAll('.topbar-nav .nav-btn').forEach((btn) => {
     const action = btn.dataset.action;

@@ -4,6 +4,8 @@ import { renderSidebar } from './sidebar.js';
 import { renderFolderTree, renderCardList, renderFolderSelects } from './manage.js';
 import { renderCreatePreview, readCreateForm } from './create.js';
 import { renderStudyMeta } from './study.js';
+import { updateCreateSaveStamp } from '../app/actions.js';
+import { syncSidebarHeightToMain } from './router.js';
 
 export { renderManageDetail } from './manage.js';
 export { renderStudyCard } from './study.js';
@@ -28,7 +30,9 @@ export function renderAll() {
     } catch {
       renderCreatePreview({ displayText: '', blanks: [] });
     }
+    updateCreateSaveStamp();
   }
 
   renderStudyMeta();
+  syncSidebarHeightToMain();
 }

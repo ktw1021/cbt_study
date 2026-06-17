@@ -14,34 +14,28 @@ function blankInputHtml(order, card, st = {}) {
   const userVal = st.user ?? '';
   const checked = st.checked;
   const correct = st.correct;
-  const revealed = st.revealed;
+  const score = Number(st.score ?? 0);
 
   let cls = 'blank-field';
   if (checked) cls += correct ? ' ok' : ' bad';
   if (store.currentBlankFocus === order) cls += ' focus';
-  if (revealed && correct) cls += ' revealed';
 
   const hint = blankShapeHint(answer);
-  const len = Math.max(hint.length, String(userVal || (revealed && correct ? answer : '')).length, 1);
+  const len = Math.max(hint.length, String(userVal).length, 1);
   const w = `width:${len}em`;
 
-  if (revealed && !correct) {
-    return `<span class="blank-wrap" id="blankWrap${order}">
-      <input type="text" class="${cls} blank-field-shape" data-blank-order="${order}" data-action="blank-input"
-        value="${escapeHtml(userVal)}" placeholder="${escapeHtml(hint)}" style="${w}" />
-      <span class="blank-hint bad-hint">→ ${escapeHtml(answer)}</span>
-    </span>`;
-  }
-  if (revealed && correct) {
-    return `<span class="blank-wrap" id="blankWrap${order}">
-      <input type="text" class="${cls} blank-field-shape" data-blank-order="${order}" data-action="blank-input"
-        value="${escapeHtml(userVal || answer)}" readonly style="${w}" />
-    </span>`;
-  }
+  // 채점됐고 (오답 || 100% 일치가 아닌 정답)이면 놓친 부분 학습을 위해 정답 노출.
+  // 입력칸은 항상 편집 가능 — 맞아도 수정·삭제 가능.
+  const reveal = checked && (!correct || score < 100);
+  const wrapCls = reveal ? 'blank-wrap revealing' : 'blank-wrap';
+  const answerCls = correct ? 'blank-answer partial' : 'blank-answer wrong';
+  const answerHtml = reveal
+    ? `<span class="${answerCls}">정답 ${escapeHtml(answer)}</span>`
+    : '';
 
-  return `<span class="blank-wrap" id="blankWrap${order}">
+  return `<span class="${wrapCls}" id="blankWrap${order}">
     <input type="text" class="${cls} blank-field-shape" data-blank-order="${order}" data-action="blank-input"
-      value="${escapeHtml(userVal)}" placeholder="${escapeHtml(hint)}" style="${w}" autocomplete="off" />
+      value="${escapeHtml(userVal)}" placeholder="${escapeHtml(hint)}" style="${w}" autocomplete="off" />${answerHtml}
   </span>`;
 }
 

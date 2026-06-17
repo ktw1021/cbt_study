@@ -5,7 +5,7 @@ import { setState, store } from './core/store.js';
 import { loadState, persist } from './core/storage.js';
 import { migrateState } from './domain/migrate.js';
 import { parseRoute, navigate, syncUrl } from './core/hash-router.js';
-import { showSection, toggleSidebar, applySidebarState, toggleMobileMenu, closeMobileMenu, handleViewportChange } from './ui/router.js';
+import { showSection, toggleSidebar, applySidebarState, toggleMobileMenu, closeMobileMenu, handleViewportChange, syncSidebarHeightToMain } from './ui/router.js';
 import { renderAll, renderManageDetail, renderStudyCard, renderCreateForm } from './ui/render.js';
 import { getCard } from './domain/queries.js';
 import { showAuthOverlay, renderAuthUserLists, setAuthTab, showAuthMessage } from './ui/auth.js';
@@ -13,6 +13,12 @@ import { formatProblemHtml } from './ui/prompt.js';
 import * as actions from './app/actions.js';
 import { chipRemoveEl } from './ui/chip-editor.js';
 import { closeModal } from './ui/modal.js';
+import { renderPatchPage } from './ui/patch-notes.js';
+import { initCaretAutoscroll } from './ui/caret-scroll.js';
+import { saveStudySession } from './services/study-session.js';
+import { syncThresholdControls, setGradingThreshold } from './ui/study.js';
+import { handleOutlineModalAction, closeOutlineModal, isOutlineModalOpen } from './ui/outline-modal.js';
+import { toggleOutlineSummary } from './ui/create.js';
 
 /** hash → 화면 (뒤로가기) */
 function handleHashRoute(fromInit = false) {
@@ -24,12 +30,21 @@ function handleHashRoute(fromInit = false) {
     return;
   }
 
+  if (route.page === 'patch') {
+    showSection('patch', { fromHash: true });
+    renderPatchPage();
+    return;
+  }
+
   if (route.page === 'create') {
     showSection('create', { fromHash: true, urlExtra: { cardId: route.cardId } });
+    const draft = store.data.ui.createDraft;
     if (route.cardId) {
       const c = getCard(route.cardId);
-      if (c) renderCreateForm(c);
-      else renderCreateForm(null);
+      if (draft && draft.id === route.cardId) renderCreateForm(draft);
+      else renderCreateForm(c || null);
+    } else if (draft && !draft.id) {
+      renderCreateForm(draft);
     } else if (!fromInit) {
       renderCreateForm(null);
     }
@@ -67,7 +82,7 @@ async function init() {
     setState(migrateState(null));
   }
 
-  document.getElementById('gradingThreshold').value = store.data.settings.gradingThreshold;
+  syncThresholdControls();
   applySidebarState();
 
   const sessionRestored = actions.restoreSession();
@@ -96,7 +111,11 @@ async function init() {
     showAuthMessage(`화면 초기화 오류: ${err.message}`, 'error');
   }
 
+  // 카드제작 자동 저장 (5분마다)
+  setInterval(() => { actions.autoSaveCreate(); }, 5 * 60 * 1000);
+
   window.addEventListener('resize', handleViewportChange);
+  window.addEventListener('resize', () => syncSidebarHeightToMain());
 }
 
 function bindEvents() {
@@ -109,6 +128,7 @@ function bindEvents() {
   document.addEventListener('keydown', onKeydown);
   document.addEventListener('mouseover', actions.handleBlankPeekOver);
   document.addEventListener('mouseout', actions.handleBlankPeekOut);
+  initCaretAutoscroll();
 
   document.getElementById('folderTree').addEventListener('dragover', (e) => {
     const node = e.target.closest('[data-folder-id]');
@@ -156,6 +176,13 @@ function onClick(e) {
     return;
   }
 
+  const backdrop = e.target.closest('.modal-backdrop');
+  if (backdrop && e.target === backdrop) {
+    closeModal();
+    closeOutlineModal();
+    return;
+  }
+
   const btn = e.target.closest('[data-action]');
   if (!btn) return;
   const action = btn.dataset.action;
@@ -164,9 +191,10 @@ function onClick(e) {
     'toggle-sidebar': () => toggleSidebar(),
     'toggle-mobile-menu': () => toggleMobileMenu(),
     'close-mobile-menu': () => closeMobileMenu(),
-    'nav-manage': () => showSection('manage'),
-    'nav-create': () => actions.startNewCard(),
-    'nav-study': () => showSection('study'),
+    'nav-manage': () => { showSection('manage'); renderAll(); },
+    'nav-create': () => actions.goCreate(),
+    'nav-study': () => { showSection('study'); renderAll(); },
+    'nav-patch': () => { showSection('patch'); renderPatchPage(); },
     'export-all': () => actions.handleExport('all'),
     'export-user': () => actions.handleExport('user'),
     'export-folder': () => actions.handleExport('folder'),
@@ -190,8 +218,24 @@ function onClick(e) {
     'remove-blank-order': () => actions.removeBlankByOrder(btn.dataset.editor, Number(btn.dataset.order)),
     'jump-blank': () => actions.jumpToBlank(btn.dataset.editor, Number(btn.dataset.order)),
     'auto-blank': () => actions.openAutoBlank(btn.dataset.editor),
-    'quick-auto-blank': () => actions.applyQuickAutoBlank(btn.dataset.editor, Number(btn.dataset.limit || 5)),
+    'quick-auto-blank': () => actions.confirmQuickAutoBlank(btn.dataset.editor, Number(btn.dataset.limit || 5)),
+    'outline-blank-all': () => actions.applyOutlineBlanksAll(),
+    'outline-blank-selected': () => actions.applyOutlineBlanksSelected(),
+    'outline-unblank': () => actions.removeOutlineBlanks(),
+    'open-outline': () => actions.openOutlineManager(),
+    'toggle-outline-summary': () => toggleOutlineSummary(),
+    'outline-run-preview': () => { handleOutlineModalAction('outline-run-preview'); },
+    'outline-adopt-preview': () => { handleOutlineModalAction('outline-adopt-preview'); },
+    'outline-item-del': () => { handleOutlineModalAction('outline-item-del', btn); },
+    'apply-outline': () => { handleOutlineModalAction('apply-outline'); },
+    'outline-modal-cancel': () => { handleOutlineModalAction('outline-modal-cancel'); },
     'start-study': () => actions.startStudy(),
+    'resume-study': () => actions.resumeStudy(),
+    'pick-study-folder': () => actions.openStudyFolderModal(),
+    'pick-study-cards': () => actions.openStudyCardModal(),
+    'pick-study-flag': () => actions.pickStudyFlag(Number(btn.dataset.flag)),
+    'filter-flag': () => actions.pickFilterFlag(btn.dataset.flag),
+    'start-selected-study': () => actions.startSelectedStudy(),
     'grade': () => actions.gradeCurrent(),
     'hide-answers': () => actions.hideAnswers(),
     'save-memo': () => actions.saveStudyMemo(),
@@ -213,12 +257,16 @@ function onClick(e) {
     'expand-tree': () => actions.expandAllTree(true),
     'collapse-tree': () => actions.expandAllTree(false),
     'create-root-folder': () => actions.createFolder(null),
-    'close-modal': () => closeModal(),
+    'select-root-folder': () => actions.selectFolder(null),
     'apply-auto-blank': () => actions.applyAutoBlank(),
+    'close-modal': () => closeModal(),
   };
 
-  if (action === 'close-modal' && e.target === btn && btn.classList.contains('modal-backdrop')) {
-    closeModal();
+  if (isOutlineModalOpen() && btn.closest('.outline-modal')) {
+    if (map[action]) {
+      e.preventDefault();
+      map[action]();
+    }
     return;
   }
 
@@ -232,11 +280,12 @@ function onChange(e) {
   if (e.target.id === 'importFile') actions.handleImport(e.target.files?.[0]).then(() => { e.target.value = ''; });
   if (e.target.dataset.action === 'toggle-select') actions.toggleSelected(e.target.dataset.id, e.target.checked);
   if (e.target.dataset.action === 'move-card-folder') actions.moveCardFolder(e.target.dataset.cardId, e.target.value);
-  if (['searchInput', 'flagFilter', 'wrongFilter'].includes(e.target.id)) renderAll();
-  if (e.target.id === 'gradingThreshold') {
-    store.data.settings.gradingThreshold = Number(e.target.value);
+  if (['searchInput', 'wrongFilter'].includes(e.target.id)) renderAll();
+  if (e.target.id === 'filterFolderSelect') actions.onFilterFolderChange();
+  if (['studyScope', 'studyOrder'].includes(e.target.id)) actions.onStudyConfigChange();
+  if (e.target.id === 'gradingThreshold' || e.target.id === 'gradingThresholdPlay') {
+    setGradingThreshold(Number(e.target.value));
     persist();
-    renderAll();
   }
 }
 
@@ -248,8 +297,16 @@ function onInput(e) {
   if (e.target.id === 'explanationTemplate') { actions.onCreateInput(); return; }
   if (e.target.id === 'studyEditExplanation') { actions.onStudyEditInput(); return; }
   if (e.target.matches('input.blank-field')) {
+    const order = Number(e.target.dataset.blankOrder);
+    actions.resetBlankGradeIfEdited(order, e.target.value);
     const n = Math.max(e.target.placeholder?.length || 0, e.target.value.length, 1);
     e.target.style.width = `${n}em`;
+    clearTimeout(onInput._blankSave);
+    onInput._blankSave = setTimeout(() => { saveStudySession(); persist(); }, 500);
+  }
+  if (e.target.id === 'gradingThreshold' || e.target.id === 'gradingThresholdPlay') {
+    setGradingThreshold(Number(e.target.value));
+    return;
   }
   if (['searchInput'].includes(e.target.id)) renderAll();
 }
@@ -261,6 +318,13 @@ function onKeydown(e) {
   if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     actions.undoAppState();
+    return;
+  }
+
+  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') {
+    // 브라우저 기본 저장(페이지 저장) 막고, 카드제작은 바로 저장
+    e.preventDefault();
+    if (store.currentSection === 'create') actions.saveCard();
     return;
   }
 

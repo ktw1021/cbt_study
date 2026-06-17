@@ -14,5 +14,10 @@
   --amber: #d97706;
   --pink: #ec4899;
   --pink-soft: #fce7f3;
+  /* 이어서 학습 — 학습모드 핑크와 구분되는 더 연한 파스텔 */
+  --resume-pink: #e8a4c9;
+  --resume-pink-soft: #fdf4f8;
+  --resume-pink-border: #f3d0e3;
+  --resume-pink-text: #9d3d6b;
   --shadow: 0 10px 28px rgba(15, 23, 42, 0.08);
 }

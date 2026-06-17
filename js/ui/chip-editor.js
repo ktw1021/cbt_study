@@ -207,29 +207,65 @@ export function chipMakeBlank(id) {
   const el = document.getElementById(id);
   if (!el) return false;
   const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) {
-    alert('빈칸으로 만들 단어·구절을 드래그로 선택하세요.');
-    return false;
-  }
+  if (!sel || sel.rangeCount === 0) return false;
   const range = sel.getRangeAt(0);
-  if (range.collapsed || !el.contains(range.commonAncestorContainer)) {
-    alert('빈칸으로 만들 단어·구절을 드래그로 선택하세요.');
-    return false;
+  if (!el.contains(range.commonAncestorContainer)) return false;
+
+  // 선택이 없으면(커서만 있으면) 커서 주변 단어를 자동으로 선택
+  const autoPicked = range.collapsed;
+  if (range.collapsed) {
+    const node = range.startContainer;
+    if (node?.nodeType !== 3) return false;
+    const full = node.nodeValue || '';
+    const pos = range.startOffset;
+    const isWord = (ch) => /[A-Za-z가-힣·\-]/.test(ch || '');
+    let s = pos;
+    let e = pos;
+    while (s > 0 && isWord(full[s - 1])) s -= 1;
+    while (e < full.length && isWord(full[e])) e += 1;
+    if (s === e) return false;
+    range.setStart(node, s);
+    range.setEnd(node, e);
+    sel.removeAllRanges();
+    sel.addRange(range);
   }
+
   // 칩을 가로지르는 선택 방지: 한 텍스트 노드 안의 선택만 허용
-  if (range.commonAncestorContainer.nodeType !== 3) {
-    alert('한 구간의 글자만 선택해서 빈칸으로 만들어 주세요. (빈칸을 가로지를 수 없음)');
-    return false;
+  if (range.commonAncestorContainer.nodeType !== 3) return false;
+
+  const original = range.toString();
+  const leadingWs = (original.match(/^\s*/)?.[0]) ?? '';
+  const trailingWs = (original.match(/\s*$/)?.[0]) ?? '';
+  let text = original.trim();
+  if (!text) return false;
+
+  // 조사/접미사 분리 (긴 것부터)
+  // - 커서 기반 자동 선택일 때만 적용 (드래그로 포함하려는 경우를 존중)
+  // - 조사/접미사는 "삭제"가 아니라 칩 뒤에 남긴다
+  let suffixText = '';
+  if (autoPicked) {
+    const SUFFIXES = [
+      '으로부터', '로부터', '까지', '부터',
+      '으로', '로', '에게서', '에게', '에서', '으로서', '로서', '와', '과',
+      '은', '는', '이', '가', '을', '를', '의', '도', '만',
+    ];
+    for (const suf of SUFFIXES) {
+      if (text.length > suf.length + 1 && text.endsWith(suf)) {
+        suffixText = suf;
+        text = text.slice(0, -suf.length).trim();
+        break;
+      }
+    }
   }
-  const text = range.toString();
-  if (!text.trim()) {
-    alert('빈칸으로 만들 단어·구절을 드래그로 선택하세요.');
-    return false;
-  }
+  if (text.length < 2) return false;
 
   const chip = makeChipEl(text.trim());
   range.deleteContents();
-  range.insertNode(chip);
+  const frag = document.createDocumentFragment();
+  if (leadingWs) frag.appendChild(document.createTextNode(leadingWs));
+  frag.appendChild(chip);
+  if (suffixText || trailingWs) frag.appendChild(document.createTextNode(`${suffixText}${trailingWs}`));
+  range.insertNode(frag);
 
   const after = document.createRange();
   after.setStartAfter(chip);

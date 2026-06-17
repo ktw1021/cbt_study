@@ -1,6 +1,9 @@
-import { escapeHtml, stripBlankMarkers } from '../utils/text.js';
+import { escapeHtml, stripBlankMarkers, normalizeTight } from '../utils/text.js';
 import { syncTemplateAndBlanks } from '../domain/blank.js';
+import { normalizeOutline, extractOutlineBlankToken } from '../domain/outline.js';
 import { formatProblemHtml, formatPromptHtml } from './prompt.js';
+import { store } from '../core/store.js';
+import { persist } from '../core/storage.js';
 import {
   setChipEditorContent,
   readChipEditor,
@@ -18,6 +21,109 @@ export function syncCardFlagPicker(value) {
   });
 }
 
+/** 카드에 저장된 목차 JSON — hidden input */
+export function readOutlineFromForm() {
+  const raw = document.getElementById('cardOutlineData')?.value;
+  if (!raw?.trim()) return null;
+  try {
+    return normalizeOutline(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+export function writeOutlineToForm(outline) {
+  const el = document.getElementById('cardOutlineData');
+  if (!el) return;
+  el.value = outline?.items?.length ? JSON.stringify(outline) : '';
+  const { blanks } = readChipEditor('explanationTemplate');
+  renderOutlineSummary(outline, { blanks });
+}
+
+const OUTLINE_SUMMARY_COLLAPSE_AFTER = 8;
+
+function attrValue(text) {
+  return String(text ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/\r\n|\n|\r|\t/g, ' ');
+}
+
+function renderOutlineSummaryItem(it, occupiedSet) {
+  const token = extractOutlineBlankToken(it.title);
+  const isBlank = token.length >= 2 && occupiedSet.has(normalizeTight(token));
+  const lineNo = (Number(it.lineIndex) || 0) + 1;
+  const pick = isBlank
+    ? '<span class="outline-summary-status is-blank">빈칸</span>'
+    : (token.length >= 2
+      ? `<label class="outline-summary-pick" title="빈칸으로 만들 항목"><input type="checkbox" data-outline-blank-token="${attrValue(token)}" /></label>`
+      : '<span class="outline-summary-status">—</span>');
+
+  return `
+    <div class="outline-tree-node" style="--ol-level:${Math.min(it.level || 0, 5)}">
+      <div class="outline-tree-row outline-summary-row">
+        ${pick}
+        <span class="outline-tree-badge">${escapeHtml(it.label || '·')}</span>
+        <span class="outline-tree-title-read">${escapeHtml(it.title)}</span>
+        <span class="outline-tree-line-num" title="해설 ${lineNo}행">${lineNo}행</span>
+      </div>
+    </div>`;
+}
+
+export function renderOutlineSummary(outline, { blanks = [] } = {}) {
+  const box = document.getElementById('outlineSummary');
+  if (!box) return;
+  const norm = normalizeOutline(outline);
+  const items = (norm?.items || []).filter((it) => it.enabled !== false);
+  const n = items.length;
+  const occupiedSet = new Set(blanks.map((b) => normalizeTight(b.answer)));
+
+  if (!n) {
+    box.innerHTML = `
+      <div class="outline-summary-panel outline-summary-panel--empty">
+        <span class="empty">목차 없음 — 「목차 생성·관리」로 해설에서 잡으세요</span>
+      </div>`;
+    return;
+  }
+
+  const hidden = Math.max(0, n - OUTLINE_SUMMARY_COLLAPSE_AFTER);
+  const needsToggle = hidden > 0;
+  const expanded = !!store.data.ui.outlineSummaryExpanded;
+  const treeCls = needsToggle
+    ? `outline-summary-tree ${expanded ? 'is-expanded' : 'is-collapsed'}`
+    : 'outline-summary-tree';
+  box.innerHTML = `
+    <div class="outline-summary-panel">
+      <div class="outline-summary-head">
+        <span class="outline-summary-head-title">저장된 목차</span>
+        <span class="pill">${n}개</span>
+      </div>
+      <div class="${treeCls}" id="outlineSummaryTree">
+        ${items.map((it) => renderOutlineSummaryItem(it, occupiedSet)).join('')}
+      </div>
+      ${needsToggle ? `<button type="button" class="ghost small outline-summary-toggle" data-action="toggle-outline-summary" data-hidden-count="${hidden}">${expanded ? '접기' : `더보기 (${hidden}개 더)`}</button>` : ''}
+      <div class="toolbar outline-summary-actions">
+        <button type="button" class="secondary small" data-action="outline-blank-all">모두 빈칸으로</button>
+        <button type="button" class="secondary small" data-action="outline-blank-selected">선택 빈칸 만들기</button>
+        <button type="button" class="ghost small" data-action="outline-unblank">모두 해제</button>
+      </div>
+    </div>`;
+}
+
+export function toggleOutlineSummary() {
+  const tree = document.getElementById('outlineSummaryTree');
+  const btn = document.querySelector('[data-action="toggle-outline-summary"]');
+  if (!tree || !btn) return;
+  const expanded = !tree.classList.contains('is-expanded');
+  tree.classList.toggle('is-expanded', expanded);
+  tree.classList.toggle('is-collapsed', !expanded);
+  store.data.ui.outlineSummaryExpanded = expanded;
+  persist();
+  const hidden = Number(btn.dataset.hiddenCount || 0);
+  btn.textContent = expanded ? '접기' : `더보기 (${hidden}개 더)`;
+}
+
 /** 카드 제작 폼 렌더 */
 export function renderCreateForm(card) {
   document.getElementById('cardId').value = card?.id || '';
@@ -27,6 +133,7 @@ export function renderCreateForm(card) {
   document.getElementById('promptTemplate').value = stripBlankMarkers(card?.displayText || '');
   setChipEditorContent('explanationTemplate', card?.explanationText || '', card?.blanks || []);
   document.getElementById('cardMemo').value = card?.memo || '';
+  writeOutlineToForm(card?.outline || null);
   renderCreatePreview(card || { displayText: '', explanationText: '', blanks: [] });
 }
 
@@ -54,6 +161,8 @@ export function renderCreatePreview(data) {
         <div class="answer-readonly">${escapeHtml(b.answer) || '<span class="empty">(단어 없음)</span>'}</div>
       </div>`).join('')
     : '<div class="caption">해설에서 단어를 드래그해 빈칸을 만들면 여기에 표시됩니다.</div>';
+
+  renderOutlineSummary(readOutlineFromForm(), { blanks: synced.blanks });
 }
 
 /** 폼에서 카드 draft 읽기 (정답·빈칸은 칩 에디터가 단일 출처) */
@@ -69,6 +178,7 @@ export function readCreateForm() {
     blanks,
     memo: document.getElementById('cardMemo').value,
     flagColor: Number(document.getElementById('cardFlag').value),
+    outline: readOutlineFromForm(),
   };
 }
 

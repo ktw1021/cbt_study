@@ -61,31 +61,19 @@ export function countCardsInFolder(folderId, userId) {
   return getUserCards(userId).filter((c) => ids.includes(c.folderId)).length;
 }
 
-/** 폴더 select 옵션 HTML */
-export function buildFolderOptions(userId, parentId = null, depth = 0) {
-  const folders = getUserFolders(userId)
-    .filter((f) => f.parentId === parentId)
-    .sort((a, b) => a.name.localeCompare(b.name, 'ko'));
-
-  return folders.flatMap((f) => {
-    const pad = '　'.repeat(depth);
-    return [
-      `<option value="${f.id}">${pad}${escapeHtml(f.name)}</option>`,
-      buildFolderOptions(userId, f.id, depth + 1),
-    ];
-  }).join('');
-}
-
-/** 필터된 카드 목록 (검색·플래그·결과·폴더) */
-export function getCardsFiltered(filters, activeFolderId) {
+/** 하위 폴더 ID 목록 */
+export function getCardsFiltered(filters) {
   const user = getActiveUser();
   if (!user) return [];
   const userId = user.id;
   let cards = getUserCards(userId);
 
-  if (activeFolderId) {
-    const ids = [activeFolderId, ...getDescendantFolderIds(activeFolderId, userId)];
-    cards = cards.filter((c) => ids.includes(c.folderId));
+  if (filters.folderId) {
+    const folder = getFolder(filters.folderId);
+    if (folder?.userId === userId) {
+      const ids = [filters.folderId, ...getDescendantFolderIds(filters.folderId, userId)];
+      cards = cards.filter((c) => ids.includes(c.folderId));
+    }
   }
 
   const q = filters.search.trim().toLowerCase();
@@ -101,20 +89,32 @@ export function getCardsFiltered(filters, activeFolderId) {
 }
 
 /** 학습 큐 생성 */
-export function buildStudyQueue(mode, activeFolderId, selectedIds) {
+/**
+ * 학습 큐 구성 — 범위(scope) × 순서(order).
+ * scope: all | folder | selected | wrong | flag
+ * order: created(만든 순서) | low-rounds(회독 낮은 순) | random(호출부에서 셔플)
+ * 폴더 범위인데 folderId가 없으면 빈 배열(전체로 새지 않음).
+ */
+export function buildStudyQueue({ scope = 'all', order = 'created', folderId = null, flag = 0, selectedIds = [] } = {}) {
   const user = getActiveUser();
   if (!user) return [];
   const userId = user.id;
   let cards = getUserCards(userId);
 
-  if (mode.startsWith('folder') && activeFolderId) {
-    const ids = [activeFolderId, ...getDescendantFolderIds(activeFolderId, userId)];
+  if (scope === 'folder') {
+    if (!folderId) return [];
+    const ids = [folderId, ...getDescendantFolderIds(folderId, userId)];
     cards = cards.filter((c) => ids.includes(c.folderId));
+  } else if (scope === 'selected') {
+    cards = cards.filter((c) => selectedIds.includes(c.id));
+  } else if (scope === 'wrong') {
+    cards = cards.filter((c) => c.lastResult === 'wrong');
+  } else if (scope === 'flag') {
+    if (!flag) return [];
+    cards = cards.filter((c) => c.flagColor === Number(flag));
   }
-  if (mode.startsWith('selected')) cards = cards.filter((c) => selectedIds.includes(c.id));
-  if (mode === 'wrong-only') cards = cards.filter((c) => c.lastResult === 'wrong');
-  if (mode === 'flag-only') cards = cards.filter((c) => c.flagColor > 0);
-  if (mode === 'low-rounds') {
+
+  if (order === 'low-rounds') {
     cards = cards.slice().sort((a, b) => a.rounds - b.rounds || a.wrongCount - b.wrongCount);
   }
 

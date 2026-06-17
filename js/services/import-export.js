@@ -23,7 +23,7 @@ export function exportData(scope, activeFolderId) {
     };
   } else if (scope === 'folder') {
     if (!activeFolderId) {
-      alert('폴더를 먼저 선택하세요.');
+      alert('내보낼 폴더를 선택하세요.');
       return;
     }
     const fids = [activeFolderId, ...getDescendantFolderIds(activeFolderId, uid)];

@@ -24,7 +24,7 @@
   <div class="sidebar-wrap">
   <aside class="sidebar">
     <div class="title">CBT 빈칸 학습</div>
-    <div class="sub">Anki식 폴더 관리 + 긴 원문 빈칸 학습. 데이터는 브라우저 IndexedDB에 저장됩니다.</div>
+    <button id="navPatch" class="small ghost sidebar-patch-btn" data-action="nav-patch">패치노트</button>
 
     <div class="panel">
       <h3>메뉴</h3>
@@ -33,8 +33,8 @@
         <button class="nav-btn small primary" id="navCreate" data-action="nav-create">카드제작</button>
         <button class="nav-btn small pink-nav" id="navStudy" data-action="nav-study">학습모드</button>
       </div>
-      <div style="height:8px"></div>
-      <div class="toolbar">
+      <div id="sidebarResumeMount" class="resume-panel-mount hidden"></div>
+      <div class="toolbar sidebar-menu-tools">
         <button class="ghost small" data-action="export-all">전체 내보내기</button>
         <button class="ghost small" data-action="export-user">유저 내보내기</button>
         <button class="ghost small" data-action="export-folder">폴더 내보내기</button>
@@ -66,35 +66,45 @@
       <label>검색</label>
       <input id="searchInput" type="text" placeholder="제목/원문/메모 검색" />
       <label style="margin-top:8px">플래그</label>
-      <select id="flagFilter">
-        <option value="all">전체</option>
-        <option value="0">없음</option>
-        <option value="1">1 빨강</option><option value="2">2 주황</option><option value="3">3 노랑</option>
-        <option value="4">4 초록</option><option value="5">5 청록</option><option value="6">6 파랑</option><option value="7">7 보라</option>
-      </select>
+      <div id="filterFlagPicker" class="flag-picker filter-flag-picker">
+        <button type="button" class="flag-pick filter-flag-all" data-action="filter-flag" data-flag="all" title="전체">전체</button>
+        <button type="button" class="flag-pick" data-action="filter-flag" data-flag="0" title="없음"><span class="flag flag-0"></span></button>
+        <button type="button" class="flag-pick" data-action="filter-flag" data-flag="1" title="빨강"><span class="flag flag-1"></span></button>
+        <button type="button" class="flag-pick" data-action="filter-flag" data-flag="2" title="주황"><span class="flag flag-2"></span></button>
+        <button type="button" class="flag-pick" data-action="filter-flag" data-flag="3" title="노랑"><span class="flag flag-3"></span></button>
+        <button type="button" class="flag-pick" data-action="filter-flag" data-flag="4" title="초록"><span class="flag flag-4"></span></button>
+        <button type="button" class="flag-pick" data-action="filter-flag" data-flag="5" title="청록"><span class="flag flag-5"></span></button>
+        <button type="button" class="flag-pick" data-action="filter-flag" data-flag="6" title="파랑"><span class="flag flag-6"></span></button>
+        <button type="button" class="flag-pick" data-action="filter-flag" data-flag="7" title="보라"><span class="flag flag-7"></span></button>
+      </div>
+      <label style="margin-top:8px">폴더</label>
+      <select id="filterFolderSelect" class="folder-select"></select>
       <label style="margin-top:8px">최근 결과</label>
-      <select id="wrongFilter">
+      <select id="wrongFilter" class="folder-select" title="마지막 학습에서 전부 맞/틀린 카드만 골라냅니다">
         <option value="all">전체</option>
         <option value="wrong">최근 오답</option>
         <option value="correct">최근 정답</option>
       </select>
+      <div class="caption filter-result-hint">마지막 학습에서 전부 맞/틀린 카드만 골라냅니다</div>
     </div>
 
     <div class="panel">
-      <h3>선택 카드</h3>
-      <div class="toolbar">
-        <button class="small" data-action="select-all">전체 선택</button>
-        <button class="small" data-action="deselect-all">전체 해제</button>
+      <div class="between">
+        <h3>선택 카드</h3>
+        <span id="selectionCount" class="caption"></span>
+      </div>
+      <div class="selection-select-row">
+        <button class="small selection-half" data-action="select-all">전체 선택</button>
+        <button class="small selection-half" data-action="deselect-all">전체 해제</button>
+      </div>
+      <div class="selection-study-row">
+        <select id="selectedStudyOrder" class="sel-inline" title="학습 순서">
+          <option value="order">순서대로</option>
+          <option value="random">랜덤</option>
+        </select>
+        <button class="pink small" id="startSelectedBtn" data-action="start-selected-study">학습 시작</button>
       </div>
       <div id="selectionList" class="list" style="margin-top:8px;max-height:200px"></div>
-    </div>
-
-    <div class="panel soft caption">
-      <strong>단축키</strong><br>
-      Ctrl+B: 해설에서 선택 영역 → 빈칸<br>
-      Ctrl+Alt+Z: 앱 상태 되돌리기<br>
-      Ctrl+1~7: 플래그 / Ctrl+0: 해제<br>
-      Enter(해설 빈칸): 해당 칸 채점
     </div>
   </aside>
   </div>
@@ -115,13 +125,16 @@
         <div>
           <div class="panel soft">
             <div class="between">
-              <h3>폴더</h3>
+              <div class="folder-head-left">
+                <h3 data-action="select-root-folder" class="folder-root-title" title="전체(루트)로 돌아가기">폴더</h3>
+                <button class="small folder-add" data-action="create-root-folder" title="루트 폴더 만들기">+</button>
+              </div>
               <div class="toolbar">
                 <button class="small ghost" data-action="expand-tree">펼치기</button>
                 <button class="small ghost" data-action="collapse-tree">접기</button>
-                <button class="small secondary" data-action="create-root-folder">루트 폴더</button>
               </div>
             </div>
+            <div id="folderBreadcrumb" class="folder-breadcrumb"></div>
             <div id="folderTree" class="tree-root" style="margin-top:8px"></div>
           </div>
           <div id="cardList" class="list" style="margin-top:10px"></div>
@@ -132,18 +145,19 @@
 
     <section id="createSection" class="panel hidden">
       <div class="between">
-        <div><h2>카드제작</h2><div class="muted">왼쪽 <strong>문제</strong> · 오른쪽 <strong>해설</strong> (해설만 빈칸 · Ctrl+B)</div></div>
+        <div><h2>카드제작</h2></div>
         <div class="toolbar">
-          <button class="primary" data-action="save-card">저장</button>
+          <span id="createSaveStamp" class="caption"></span>
           <button class="ghost" data-action="new-card">새 카드</button>
+          <button class="primary" data-action="save-card">저장</button>
           <button class="danger" data-action="delete-card-form">삭제</button>
         </div>
       </div>
       <input type="hidden" id="cardId" />
-      <div class="row" style="margin-top:12px">
-        <div style="flex:2"><label>제목</label><input id="cardTitle" type="text" placeholder="카드 제목" /></div>
-        <div style="flex:2"><label>폴더</label><select id="cardFolder"></select></div>
-        <div style="flex:1.2"><label>플래그</label>
+      <div class="create-meta-row">
+        <div class="create-meta-title"><label>제목</label><input id="cardTitle" type="text" placeholder="카드 제목" /></div>
+        <div class="create-meta-folder"><label>폴더</label><select id="cardFolder" class="folder-select"></select></div>
+        <div class="create-meta-flag"><label>플래그</label>
           <input type="hidden" id="cardFlag" value="0" />
           <div id="cardFlagPicker" class="flag-picker">
             <button type="button" class="flag-pick" data-action="pick-flag" data-flag="0" title="없음"><span class="flag flag-0"></span></button>
@@ -167,15 +181,22 @@
         </div>
         <div class="create-panel">
           <div class="create-panel-head explanation">해설</div>
-          <label>해설 (암기할 문장 · 빈칸은 여기만)</label>
+          <label>해설</label>
           <div id="explanationTemplate" class="xl create-input chip-editor" contenteditable="true" data-placeholder="해설·요지·암기 문장. 단어 드래그 → Ctrl+B 또는 아래 버튼"></div>
           <div class="toolbar blank-toolbar">
             <button class="secondary" type="button" data-action="make-blank" data-editor="explanationTemplate">선택 → 빈칸 (Ctrl+B)</button>
-            <button class="ghost" type="button" data-action="remove-blank" data-editor="explanationTemplate">빈칸 해제</button>
-            <button class="primary" type="button" data-action="quick-auto-blank" data-editor="explanationTemplate" data-limit="5">추천 5개 자동</button>
-            <button class="ghost" type="button" data-action="auto-blank" data-editor="explanationTemplate">후보 고르기…</button>
+            <button class="primary" type="button" data-action="quick-auto-blank" data-editor="explanationTemplate" data-limit="5">추천 5개</button>
+            <button class="ghost" type="button" data-action="auto-blank" data-editor="explanationTemplate">빈칸 후보 고르기</button>
           </div>
-          <p class="caption">자동 빈칸: 해설에서 2자+ 한글·영문 키워드를 추출합니다. 숫자·판례번호·조항·불용어(그리고, 경우 등)는 제외됩니다.</p>
+          <input type="hidden" id="cardOutlineData" value="" />
+          <div class="outline-panel soft">
+            <div class="between" style="margin-bottom:6px">
+              <label style="margin:0">목차</label>
+              <button class="secondary small" type="button" data-action="open-outline">목차 생성·관리</button>
+            </div>
+            <div id="outlineSummary" class="outline-summary"></div>
+          </div>
+          <p class="caption">자동 빈칸: <strong>저장된 목차</strong> 제목 + 해설 키워드를 후보로 씁니다. 이미 빈칸인 정답은 후보·목차 일괄에서 제외됩니다.</p>
           <label class="create-preview-label">해설 미리보기</label>
           <div id="explanationPreview" class="preview preview-scroll soft"></div>
           <div class="create-panel-foot">
@@ -191,33 +212,60 @@
     </section>
 
     <section id="studySection" class="panel hidden">
-      <div class="between">
-        <div><h2>학습모드</h2><div class="muted">좌: <strong>문제</strong> · 우: <strong>해설</strong> (빈칸 입력 → Enter 채점)</div></div>
-        <div class="toolbar">
-          <select id="studyMode">
-            <option value="all-order">전체 순서</option>
-            <option value="all-random">전체 랜덤</option>
-            <option value="folder-order">선택 폴더 순서</option>
-            <option value="folder-random">선택 폴더 랜덤</option>
-            <option value="selected-order">선택 카드 순서</option>
-            <option value="selected-random">선택 카드 랜덤</option>
-            <option value="wrong-only">최근 오답</option>
-            <option value="flag-only">플래그 카드</option>
-            <option value="low-rounds">회독 낮은 순</option>
-          </select>
-          <button class="pink" data-action="start-study">학습 시작</button>
+      <div id="studySetup">
+        <div class="between study-setup-head">
+          <div><h2>학습모드</h2><div class="muted">범위를 고른 뒤 <strong>새로 시작</strong> 또는 <strong>이어서 학습</strong> (해설 빈칸 → Enter 채점)</div></div>
         </div>
+        <div id="studyResumeMount" class="resume-panel-mount resume-panel-mount--study hidden"></div>
+        <div class="study-setup-bar">
+          <div class="setup-field">
+            <label>범위 (무엇을)</label>
+            <select id="studyScope">
+              <option value="all">전체 카드</option>
+              <option value="folder">폴더</option>
+              <option value="selected">선택 카드</option>
+              <option value="wrong">최근 오답</option>
+              <option value="flag">플래그</option>
+            </select>
+          </div>
+          <div class="setup-field">
+            <label>순서 (어떻게)</label>
+            <select id="studyOrder">
+              <option value="created">만든 순서</option>
+              <option value="low-rounds">회독 낮은 순</option>
+              <option value="random">랜덤</option>
+            </select>
+          </div>
+          <div class="setup-field">
+            <label>유사도 (채점 기준)</label>
+            <div class="setup-threshold">
+              <input id="gradingThreshold" type="range" min="50" max="100" step="5" />
+              <span id="thresholdLabel" class="pill"></span>
+            </div>
+          </div>
+          <button class="pink" id="startStudyBtn" data-action="start-study">새로 시작</button>
+        </div>
+        <div id="studyScopeDetail" class="study-scope-detail"></div>
+        <div id="studySummary" class="study-summary"></div>
+        <div id="studyPreviewList" class="study-preview"></div>
       </div>
-      <div class="toolbar" style="margin-top:10px">
+
+      <div id="studyPlayBar" class="toolbar study-play-bar">
         <span id="studyMeta"></span>
-        <label>유사도</label>
-        <input id="gradingThreshold" type="range" min="50" max="100" step="5" style="width:160px" />
-        <span id="thresholdLabel" class="pill"></span>
         <span id="roundBadge" class="pill">회독 0</span>
         <button class="ghost small" data-action="round-minus">회독 -1</button>
         <button class="ghost small" data-action="round-plus">회독 +1</button>
-        <button class="ghost small" data-action="prev-card">이전</button>
-        <button class="ghost small" data-action="next-card">다음</button>
+        <div class="study-play-threshold setup-field">
+          <label>유사도</label>
+          <div class="setup-threshold">
+            <input id="gradingThresholdPlay" type="range" min="50" max="100" step="5" />
+            <span id="thresholdLabelPlay" class="pill"></span>
+          </div>
+        </div>
+        <span class="study-step-nav">
+          <button class="ghost small" data-action="prev-card">← 이전</button>
+          <button class="ghost small" data-action="next-card">다음 →</button>
+        </span>
       </div>
 
       <div class="study-workspace">
@@ -261,13 +309,13 @@
         </div>
       </div>
 
-      <details class="panel soft" style="margin-top:12px">
+      <details id="studyEditPanel" class="panel soft" style="margin-top:12px">
         <summary style="cursor:pointer;font-weight:700">학습 중 카드 수정 (원본에 즉시 저장)</summary>
         <div class="grid2" style="margin-top:12px">
           <div class="col">
             <div class="row">
               <div style="flex:2"><label>제목</label><input id="studyEditTitle" type="text" /></div>
-              <div style="flex:2"><label>폴더</label><select id="studyEditFolder"></select></div>
+              <div style="flex:2"><label>폴더</label><select id="studyEditFolder" class="folder-select"></select></div>
             </div>
             <label>문제</label>
             <textarea id="studyEditPrompt" class="xl"></textarea>
@@ -279,9 +327,8 @@
             <div id="studyEditExplanation" class="xl chip-editor" contenteditable="true" data-placeholder="해설·암기 문장. 단어 드래그 → Ctrl+B"></div>
             <div class="toolbar blank-toolbar">
               <button class="secondary small" data-action="make-blank" data-editor="studyEditExplanation">선택 → 빈칸</button>
-              <button class="ghost small" data-action="remove-blank" data-editor="studyEditExplanation">빈칸 해제</button>
               <button class="primary small" data-action="quick-auto-blank" data-editor="studyEditExplanation" data-limit="5">추천 5개</button>
-              <button class="ghost small" data-action="auto-blank" data-editor="studyEditExplanation">후보 고르기…</button>
+              <button class="ghost small" data-action="auto-blank" data-editor="studyEditExplanation">빈칸 후보 고르기</button>
             </div>
             <label>해설 미리보기</label>
             <div id="studyEditExplanationPreview" class="preview preview-scroll"></div>
@@ -291,6 +338,14 @@
           </div>
         </div>
       </details>
+    </section>
+
+    <section id="patchSection" class="panel hidden">
+      <div class="between">
+        <div><h2>패치노트</h2><div class="muted">업데이트 내역 · 최신순 (항목을 눌러 펼치기)</div></div>
+        <button class="secondary" data-action="nav-manage">← 카드관리</button>
+      </div>
+      <div id="patchNotesBody" class="patch-body" style="margin-top:12px"></div>
     </section>
   </main>
 </div>

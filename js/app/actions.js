@@ -19,9 +19,12 @@ import {
   normalizeUserName,
 } from '../domain/queries.js';
 import { findAutoCandidates } from '../domain/blank.js';
+import { findOutlineBlankCandidates, listOutlineTokens, normalizeOutline } from '../domain/outline.js';
+import { normalizeTight } from '../utils/text.js';
 import { pushUndo, undo, hasUndo } from '../services/undo.js';
 import { checkAnswer } from '../services/grading.js';
 import { exportData, importFromFile } from '../services/import-export.js';
+import { saveStudySession, snapshotCurrentCardProgress, getPersistedStudySession, setPersistedStudySession } from '../services/study-session.js';
 import { splitAnswers } from '../utils/text.js';
 import { showSection } from '../ui/router.js';
 import {
@@ -35,6 +38,8 @@ import {
   renderStudyEditPreview,
   renderStudyEditForm,
   syncCardFlagPicker,
+  writeOutlineToForm,
+  readOutlineFromForm,
 } from '../ui/create.js';
 import {
   chipMakeBlank,
@@ -51,11 +56,16 @@ import {
   focusBlankUI,
   getBlankInputValue,
   renderStudyCard,
+  renderStudySetup,
   syncDraftFromDOM,
   handleBlankPeekOver,
   handleBlankPeekOut,
+  resetBlankGradeIfEdited,
+  getGradingThreshold,
 } from '../ui/study.js';
 import { openAutoBlankModal, closeModal, getSelectedAutoTokens } from '../ui/modal.js';
+import { openOutlineModal, handleOutlineModalAction, closeOutlineModal } from '../ui/outline-modal.js';
+import { openStudyFolderPicker, openStudyCardPicker, openExportFolderPicker } from '../ui/pickers.js';
 import { readFilters } from '../ui/sidebar.js';
 
 // ── 사용자 · 인증 ──
@@ -78,6 +88,15 @@ async function completeLogin(userId) {
   state.activeUserId = userId;
   store.activeFolderId = null;
   store.activeManageId = null;
+
+  // 사용자 전환 시 작성 초안·런타임 학습 상태만 정리 (studySessions는 계정별로 유지)
+  state.ui.createDraft = null;
+  state.ui.filterFolderId = null;
+  state.ui.filterFlag = 'all';
+  store.studyQueue = [];
+  store.studyIndex = 0;
+  store._studyCardId = null;
+  store.currentBlankStatuses = [];
 
   clearAuthInputs();
   showAuthMessage('');
@@ -212,6 +231,13 @@ export async function logoutUser() {
   getState().activeUserId = null;
   store.activeFolderId = null;
   store.activeManageId = null;
+  getState().ui.createDraft = null;
+  getState().ui.filterFolderId = null;
+  getState().ui.filterFlag = 'all';
+  store.studyQueue = [];
+  store.studyIndex = 0;
+  store._studyCardId = null;
+  store.currentBlankStatuses = [];
   clearAuthInputs();
   if (prevName) {
     const el = document.getElementById('authName');
@@ -345,20 +371,90 @@ export async function dropCardOnFolder(cardId, folderId) {
 
 // ── 카드 ──
 
+/** 카드제작 진입(메뉴) — 작성 중 초안이 있으면 이어쓰기, 없으면 빈 폼 */
+export function goCreate() {
+  const draft = getState().ui.createDraft;
+  renderCreateForm(draft || null);
+  showSection('create', { urlExtra: draft?.id ? { cardId: draft.id } : {} });
+  syncCreateSavedSnapshotFromForm();
+  document.getElementById('cardTitle').focus();
+}
+
+/** 「새 카드」 — 명시적 새로 만들기. 작성 중 새 카드가 있으면 확인 */
 export function startNewCard() {
+  const draft = getState().ui.createDraft;
+  if (draft && !draft.id) {
+    if (!confirm('작성 중인 새 카드가 있습니다. 비우고 새로 시작할까요?\n(취소 = 이어쓰기)')) {
+      goCreate();
+      return;
+    }
+  }
+  getState().ui.createDraft = null;
+  persist();
   renderCreateForm(null);
   showSection('create', { urlExtra: {} });
+  syncCreateSavedSnapshotFromForm();
   document.getElementById('cardTitle').focus();
 }
 
 export function editCard(id) {
   const c = getCard(id);
   if (!c) return;
-  renderCreateForm(c);
+  const draft = getState().ui.createDraft;
+  renderCreateForm(draft && draft.id === id ? draft : c);
   showSection('create', { urlExtra: { cardId: id } });
+  syncCreateSavedSnapshotFromForm();
 }
 
 export async function saveCard() {
+  return saveCardWithOptions();
+}
+
+function formatHHMM(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+export function updateCreateSaveStamp() {
+  const el = document.getElementById('createSaveStamp');
+  if (!el) return;
+  const saved = store.data.ui.lastSavedAt;
+  const auto = store.data.ui.lastAutoSaveAt;
+  const savedTs = saved ? new Date(saved).getTime() : 0;
+  const autoTs = auto ? new Date(auto).getTime() : 0;
+  if (!savedTs && !autoTs) { el.textContent = ''; return; }
+  if (autoTs >= savedTs) {
+    el.textContent = `자동저장 ${formatHHMM(auto)}`;
+  } else {
+    el.textContent = `마지막 저장 ${formatHHMM(saved)}`;
+  }
+}
+
+function makeCreateSnapshot(draft) {
+  const d = draft || {};
+  const outline = d.outline?.items?.length ? d.outline : null;
+  return JSON.stringify({
+    id: d.id || '',
+    folderId: d.folderId || null,
+    title: d.title || '',
+    flagColor: Number(d.flagColor) || 0,
+    displayText: d.displayText || '',
+    explanationText: d.explanationText || '',
+    memo: d.memo || '',
+    outline,
+    blanks: (d.blanks || []).map((b) => ({
+      order: Number(b.order) || 0,
+      answer: String(b.answer || ''),
+      aliases: b.aliases || [],
+    })),
+  });
+}
+
+async function saveCardWithOptions({ silent = false } = {}) {
   const draft = readCreateForm();
   if (!draft.displayText.trim()) return alert('문제를 입력하세요.');
   if (!draft.explanationText.trim()) return alert('해설을 입력하세요.');
@@ -386,16 +482,53 @@ export async function saveCard() {
     document.getElementById('cardId').value = card.id;
   }
 
+  state.ui.createDraft = null;
   await saveState();
-  alert('저장했습니다.');
+  // 마지막 저장 상태 스냅샷 (이동 경고용)
+  store.data.ui.createSavedSnapshot = makeCreateSnapshot(readCreateForm());
+  store.data.ui.lastSavedAt = new Date().toISOString();
+  persist();
+  updateCreateSaveStamp();
+  if (!silent) alert('저장했습니다.');
   showSection('create', { urlExtra: { cardId: store.activeManageId }, replaceUrl: true });
   renderManageDetail(store.activeManageId);
   renderAll();
 }
 
+export async function autoSaveCreate() {
+  if (store.currentSection !== 'create') return false;
+  try {
+    const d = readCreateForm();
+    const has = d.displayText.trim() || d.explanationText.trim() || (d.memo || '').trim()
+      || d.blanks.length || d.outline?.items?.length
+      || (d.title && d.title !== '제목 없음');
+    if (!has) return false;
+    await saveCardWithOptions({ silent: true });
+    store.data.ui.lastAutoSaveAt = new Date().toISOString();
+    persist();
+    updateCreateSaveStamp();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function syncCreateSavedSnapshotFromForm() {
+  try {
+    store.data.ui.createSavedSnapshot = makeCreateSnapshot(readCreateForm());
+    persist();
+  } catch { /* ignore */ }
+}
+
 export async function deleteCurrentCard() {
   const id = document.getElementById('cardId').value;
-  if (!id) return alert('삭제할 카드가 없습니다.');
+  if (!id) {
+    // 저장 전 새 카드 → 작성 중 초안 비우기
+    getState().ui.createDraft = null;
+    persist();
+    renderCreateForm(null);
+    return;
+  }
   if (!confirm('이 카드를 삭제할까요?')) return;
   await deleteCardById(id);
   renderCreateForm(null);
@@ -432,7 +565,7 @@ export async function toggleSelected(id, checked) {
 }
 
 export async function selectFiltered(all) {
-  const ids = getCardsFiltered(readFilters(), store.activeFolderId).map((c) => c.id);
+  const ids = getCardsFiltered(readFilters()).map((c) => c.id);
   pushUndo();
   const state = getState();
   if (all) state.selectedIds = [...new Set([...state.selectedIds, ...ids])];
@@ -462,14 +595,36 @@ export function jumpToBlank(editorId, order) {
   }
 }
 
-export function openAutoBlank(editorId) {
+export function openAutoBlank(editorId, { suggestLimit = null } = {}) {
   store.autoBlankEditorId = editorId;
   const plain = readChipPlainText(editorId);
   if (!plain.trim()) return alert('해설을 먼저 입력하세요.');
   const { blanks } = readChipEditor(editorId);
-  const candidates = findAutoCandidates(plain, blanks);
-  if (!candidates.length) return alert('자동 빈칸 후보를 찾지 못했습니다.');
-  openAutoBlankModal(candidates, applyAutoBlank);
+  const outline = readOutlineFromForm();
+  const candidates = findAutoCandidates(plain, blanks, outline);
+  if (!candidates.length) return alert('빈칸 후보를 찾지 못했습니다. (저장된 목차·키워드 없음 또는 이미 빈칸)');
+  openAutoBlankModal(candidates, applyAutoBlank, {
+    hasOutline: !!outline?.items?.length,
+    checkedCount: suggestLimit,
+  });
+}
+
+/** 추천 N개 — 즉시 적용하지 않고 confirm으로 1회 확인 */
+export function confirmQuickAutoBlank(editorId, limit = 5) {
+  const plain = readChipPlainText(editorId);
+  if (!plain.trim()) return alert('해설을 먼저 입력하세요.');
+  const { blanks } = readChipEditor(editorId);
+  const outline = readOutlineFromForm();
+  const candidates = findAutoCandidates(plain, blanks, outline);
+  if (!candidates.length) return alert('빈칸 후보를 찾지 못했습니다. (저장된 목차·키워드 없음 또는 이미 빈칸)');
+
+  const tokens = candidates.slice(0, limit).map(([t]) => t);
+  const msg = `추천 ${tokens.length}개를 빈칸으로 만들까요?\n\n${tokens.join('\n')}`;
+  if (!confirm(msg)) return;
+
+  chipApplyTokens(editorId, tokens);
+  if (editorId === 'explanationTemplate') onCreateInput();
+  else if (editorId === 'studyEditExplanation') onStudyEditInput();
 }
 
 export function applyAutoBlank() {
@@ -478,47 +633,84 @@ export function applyAutoBlank() {
   if (!tokens.length) return alert('선택된 후보가 없습니다.');
   chipApplyTokens(editorId, tokens);
   closeModal();
+  if (editorId === 'explanationTemplate') onCreateInput();
+  else if (editorId === 'studyEditExplanation') onStudyEditInput();
   alert(`${tokens.length}개 빈칸을 적용했습니다.`);
 }
 
-/** 자동 빈칸 — 상위 N개 즉시 적용 (모달 없음) */
-export function applyQuickAutoBlank(editorId, limit = 5) {
-  const plain = readChipPlainText(editorId);
+/** 저장된 목차 제목 → 빈칸 (아직 빈칸 아닌 항목만) */
+export function applyOutlineBlanksAll() {
+  const outline = readOutlineFromForm();
+  if (!normalizeOutline(outline)?.items?.length) return alert('저장된 목차가 없습니다.');
+  const { blanks } = readChipEditor('explanationTemplate');
+  const tokens = findOutlineBlankCandidates(outline, blanks).map(([t]) => t);
+  if (!tokens.length) return alert('빈칸으로 만들 목차 항목이 없습니다. (이미 모두 빈칸이거나 본문에 없음)');
+  chipApplyTokens('explanationTemplate', tokens);
+  onCreateInput();
+  saveCardWithOptions({ silent: true });
+}
+
+/** 목차 미리보기에서 체크한 항목만 빈칸 */
+export function applyOutlineBlanksSelected() {
+  const outline = readOutlineFromForm();
+  if (!normalizeOutline(outline)?.items?.length) return alert('저장된 목차가 없습니다.');
+  const tokens = [...document.querySelectorAll('[data-outline-blank-token]')]
+    .filter((el) => el.checked)
+    .map((el) => el.dataset.outlineBlankToken);
+  if (!tokens.length) return alert('목차 항목을 선택하세요.');
+  chipApplyTokens('explanationTemplate', tokens);
+  onCreateInput();
+  saveCardWithOptions({ silent: true });
+}
+
+/** 저장된 목차와 일치하는 빈칸만 해제 */
+export function removeOutlineBlanks() {
+  const outline = readOutlineFromForm();
+  if (!normalizeOutline(outline)?.items?.length) return alert('저장된 목차가 없습니다.');
+  const tokenKeys = new Set(
+    listOutlineTokens(outline).map(({ token }) => normalizeTight(token)),
+  );
+  const { blanks } = readChipEditor('explanationTemplate');
+  const orders = blanks
+    .filter((b) => tokenKeys.has(normalizeTight(b.answer)))
+    .map((b) => b.order)
+    .sort((a, b) => b - a);
+  if (!orders.length) return alert('목차에서 만든 빈칸이 없습니다.');
+  orders.forEach((order) => chipRemoveByOrder('explanationTemplate', order));
+  onCreateInput();
+  saveCardWithOptions({ silent: true });
+}
+
+export function openOutlineManager() {
+  const plain = readChipPlainText('explanationTemplate');
   if (!plain.trim()) return alert('해설을 먼저 입력하세요.');
-  const { blanks } = readChipEditor(editorId);
-  const candidates = findAutoCandidates(plain, blanks);
-  if (!candidates.length) return alert('자동 빈칸 후보를 찾지 못했습니다. (2자 미만·숫자·조항·불용어 제외)');
-  const tokens = candidates.slice(0, limit).map(([t]) => t);
-  chipApplyTokens(editorId, tokens);
-  alert(`추천 ${tokens.length}개를 빈칸으로 만들었습니다: ${tokens.join(', ')}`);
+  openOutlineModal({
+    explanationText: plain,
+    outline: readOutlineFromForm(),
+    refreshExplanation: () => readChipPlainText('explanationTemplate'),
+    onApply: async (outline) => {
+      writeOutlineToForm(outline);
+      persist();
+      await saveCardWithOptions({ silent: true });
+    },
+  });
 }
 
 // ── 학습 ──
 
-/** IndexedDB에 학습 큐 저장 (새로고침 복원용) */
-export function saveStudySession() {
-  if (!store.studyQueue.length) {
-    getState().ui.studySession = null;
-    return;
-  }
-  getState().ui.studySession = {
-    mode: document.getElementById('studyMode')?.value || 'all-order',
-    cardIds: store.studyQueue.map((c) => c.id),
-    index: store.studyIndex,
-  };
-}
+export { saveStudySession };
 
 export function clearStudySession() {
-  getState().ui.studySession = null;
+  setPersistedStudySession(null);
   store.studyQueue = [];
   store.studyIndex = 0;
   store._studyCardId = null;
   store.currentBlankStatuses = [];
 }
 
-/** 저장된 학습 큐 복원 */
-export function restoreStudySession(index = 0) {
-  const sess = getState().ui.studySession;
+/** 저장된 학습 큐 복원 — index 생략 시 세션에 저장된 카드 위치 사용 (기본값 0 금지) */
+export function restoreStudySession(index) {
+  const sess = getPersistedStudySession();
   if (!sess?.cardIds?.length) return false;
 
   const cards = sess.cardIds.map((id) => getCard(id)).filter(Boolean);
@@ -528,26 +720,124 @@ export function restoreStudySession(index = 0) {
   }
 
   store.studyQueue = cards;
-  const idx = Number.isFinite(index) ? index : (sess.index ?? 0);
+  const idx = (index !== undefined && Number.isFinite(index))
+    ? index
+    : (sess.index ?? 0);
   store.studyIndex = Math.min(Math.max(0, idx), cards.length - 1);
   store._studyCardId = null;
   store.currentBlankStatuses = [];
+  if (!sess.cardProgress) sess.cardProgress = {};
 
-  const modeSel = document.getElementById('studyMode');
-  if (modeSel && sess.mode) modeSel.value = sess.mode;
-  getState().ui.studySession.index = store.studyIndex;
+  sess.index = store.studyIndex;
   return true;
 }
 
+/** 학습 setup 폼 → 설정 객체 (folderId·flag는 모달/스와치로 따로 정해 보존) */
+export function readStudyConfig() {
+  const prev = getState().ui.studyConfig || {};
+  return {
+    ...prev,
+    scope: document.getElementById('studyScope')?.value || 'all',
+    order: document.getElementById('studyOrder')?.value || 'created',
+  };
+}
+
+/** 범위/순서 변경 → 설정 저장 + 요약 갱신 */
+export function onStudyConfigChange() {
+  getState().ui.studyConfig = readStudyConfig();
+  persist();
+  renderStudySetup();
+}
+
+/** 플래그 색 선택 (범위=플래그) */
+export function pickStudyFlag(n) {
+  getState().ui.studyConfig = { ...getState().ui.studyConfig, flag: Number(n) };
+  persist();
+  renderStudySetup();
+}
+
+/** 사이드바 필터 — 폴더 select 변경 */
+export function onFilterFolderChange() {
+  getState().ui.filterFolderId = document.getElementById('filterFolderSelect')?.value || null;
+  persist();
+  renderAll();
+}
+
+/** 사이드바 필터 — 플래그 색 */
+export function pickFilterFlag(flag) {
+  getState().ui.filterFlag = flag;
+  persist();
+  renderAll();
+}
+
+/** 폴더 선택 모달 (범위=폴더) */
+export function openStudyFolderModal() {
+  const cfg = getState().ui.studyConfig || {};
+  openStudyFolderPicker(cfg.folderId || null, (id) => {
+    getState().ui.studyConfig = { ...getState().ui.studyConfig, folderId: id };
+    persist();
+    renderStudySetup();
+  });
+}
+
+/** 카드 선택 모달 (범위=선택 카드) — selectedIds에 반영(사이드바와 공유) */
+export function openStudyCardModal() {
+  openStudyCardPicker(getState().selectedIds || [], async (ids) => {
+    getState().selectedIds = [...new Set(ids)];
+    await saveState();
+    renderAll();
+    renderStudySetup();
+  });
+}
+
 export function startStudy() {
-  const mode = document.getElementById('studyMode').value;
-  let cards = buildStudyQueue(mode, store.activeFolderId, getState().selectedIds);
-  if (mode.includes('random')) cards = shuffle(cards);
-  if (!cards.length) return alert('학습할 카드가 없습니다.');
+  const cfg = readStudyConfig();
+  getState().ui.studyConfig = cfg;
+  let cards = buildStudyQueue({ ...cfg, selectedIds: getState().selectedIds });
+  if (cfg.order === 'random') cards = shuffle(cards);
+  if (!cards.length) return alert('학습할 카드가 없습니다. 범위를 확인하세요.');
+
+  const sess = getPersistedStudySession();
+  if (sess?.cardIds?.length && !confirm('진행 중인 학습이 있습니다. 새로 시작할까요?')) return;
+
   store.studyQueue = cards;
   store.studyIndex = 0;
   store._studyCardId = null;
-  saveStudySession();
+  store.currentBlankStatuses = [];
+  saveStudySession({ resetProgress: true });
+  persist();
+  renderStudyCard();
+  showSection('study-play', { urlExtra: { index: 0 } });
+}
+
+/** 진행 중이던 학습 이어서 */
+export function resumeStudy() {
+  if (restoreStudySession()) {
+    renderStudyCard();
+    showSection('study-play', { urlExtra: { index: store.studyIndex } });
+  } else {
+    alert('이어서 학습할 내용이 없습니다.');
+    renderStudySetup();
+  }
+}
+
+/** 사이드바 「선택 카드」 → 현재 필터에 보이면서 선택된 카드만 학습 */
+export function startSelectedStudy() {
+  const order = document.getElementById('selectedStudyOrder')?.value || 'order';
+  const selected = new Set(getState().selectedIds);
+  let cards = getCardsFiltered(readFilters()).filter((c) => selected.has(c.id));
+  if (order === 'random') cards = shuffle(cards);
+  if (!cards.length) return alert('선택된 카드가 없습니다. 카드를 선택하거나 「전체 선택」을 누르세요.');
+
+  const sess = getPersistedStudySession();
+  if (sess?.cardIds?.length && !confirm('진행 중인 학습이 있습니다. 선택 카드로 새로 시작할까요?')) return;
+
+  store.studyQueue = cards;
+  store.studyIndex = 0;
+  store._studyCardId = null;
+  store.currentBlankStatuses = [];
+  saveStudySession({ resetProgress: true });
+  persist();
   renderStudyCard();
   showSection('study-play', { urlExtra: { index: 0 } });
 }
@@ -558,7 +848,9 @@ export function studyOne(id) {
   store.studyQueue = [c];
   store.studyIndex = 0;
   store._studyCardId = null;
-  saveStudySession();
+  store.currentBlankStatuses = [];
+  saveStudySession({ resetProgress: true });
+  persist();
   renderStudyCard();
   showSection('study-play', { urlExtra: { index: 0 } });
 }
@@ -571,7 +863,7 @@ export async function gradeBlankOnEnter(order) {
   const user = getBlankInputValue(order);
   if (!user) return;
 
-  const threshold = Number(document.getElementById('gradingThreshold').value);
+  const threshold = getGradingThreshold();
   const blank = c.blanks.find((b) => b.order === order);
   const { correct, score } = checkAnswer(user, splitAnswers(blank?.answer || ''), threshold);
 
@@ -592,13 +884,14 @@ export async function gradeBlankOnEnter(order) {
     applyCardResult(c, store.currentBlankStatuses);
   }
 
-  refreshStudyViews();
+  refreshStudyViews({ focusOrder: order });
   const ok = store.currentBlankStatuses.filter((s) => s.correct).length;
   const total = c.blanks.length;
   document.getElementById('gradeResult').textContent = correct
     ? `빈칸${order} 정답! (${ok}/${total})`
     : `빈칸${order} 오답 · ${score}% (${ok}/${total})`;
 
+  saveStudySession();
   await persist();
 }
 
@@ -606,8 +899,7 @@ export async function gradeCurrent() {
   const c = store.studyQueue[store.studyIndex];
   if (!c) return;
   pushUndo();
-  const threshold = Number(document.getElementById('gradingThreshold').value);
-  getState().settings.gradingThreshold = threshold;
+  const threshold = getGradingThreshold();
 
   store.currentBlankStatuses = c.blanks.map((b) => {
     const user = getBlankInputValue(b.order);
@@ -621,6 +913,7 @@ export async function gradeCurrent() {
   refreshStudyViews();
   const ok = store.currentBlankStatuses.filter((s) => s.correct).length;
   document.getElementById('gradeResult').textContent = `전체 채점 ${ok}/${store.currentBlankStatuses.length}`;
+  saveStudySession();
   await persist();
   renderAll();
 }
@@ -676,7 +969,9 @@ export function hideAnswers() {
   store.currentBlankStatuses = c.blanks.map((b) => ({
     order: b.order, checked: false, correct: false, score: 0, user: '', revealed: false,
   }));
-  store._studyCardId = null;
+  store.studyAttemptRecorded = false;
+  store._studyCardId = c.id;
+  saveStudySession();
   renderStudyCard();
   document.getElementById('gradeResult').textContent = '다시 풀 준비됐습니다.';
 }
@@ -728,9 +1023,12 @@ export async function saveStudyEdits() {
 
 export function prevCard() {
   if (store.studyIndex > 0) {
+    snapshotCurrentCardProgress();
     store.studyIndex--;
     store._studyCardId = null;
+    store.currentBlankStatuses = [];
     saveStudySession();
+    persist();
     renderStudyCard();
     showSection('study-play', { urlExtra: { index: store.studyIndex }, replaceUrl: true });
   }
@@ -738,9 +1036,12 @@ export function prevCard() {
 
 export function nextCard() {
   if (store.studyIndex < store.studyQueue.length - 1) {
+    snapshotCurrentCardProgress();
     store.studyIndex++;
     store._studyCardId = null;
+    store.currentBlankStatuses = [];
     saveStudySession();
+    persist();
     renderStudyCard();
     showSection('study-play', { urlExtra: { index: store.studyIndex }, replaceUrl: true });
   }
@@ -777,6 +1078,10 @@ export async function undoAppState() {
 }
 
 export function handleExport(scope) {
+  if (scope === 'folder') {
+    openExportFolderPicker((folderId) => exportData('folder', folderId));
+    return;
+  }
   exportData(scope, store.activeFolderId);
 }
 
@@ -812,4 +1117,4 @@ export function onStudyEditInput() {
 }
 
 export { focusBlankUI as focusBlank, renderStudyEditPreview };
-export { handleBlankPeekOver, handleBlankPeekOut };
+export { handleBlankPeekOver, handleBlankPeekOut, resetBlankGradeIfEdited };

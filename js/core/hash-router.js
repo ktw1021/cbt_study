@@ -7,6 +7,7 @@ export function parseRoute() {
   const root = parts[0] || 'manage';
 
   if (root === 'manage') return { page: 'manage' };
+  if (root === 'patch') return { page: 'patch' };
   if (root === 'create') return { page: 'create', cardId: parts[1] || null };
   if (root === 'study') {
     if (parts[1] === 'play') return { page: 'study-play', index: Number(parts[2] || 0) };
@@ -26,6 +27,7 @@ export function navigate(path, { replace = false } = {}) {
 
 export function routeToPath(page, extra = {}) {
   if (page === 'manage') return '/manage';
+  if (page === 'patch') return '/patch';
   if (page === 'create') return extra.cardId ? `/create/${extra.cardId}` : '/create';
   if (page === 'study') return '/study';
   if (page === 'study-play') return `/study/play/${extra.index ?? store.studyIndex ?? 0}`;

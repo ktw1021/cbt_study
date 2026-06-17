@@ -1,6 +1,7 @@
 import { STOPWORDS } from '../config.js';
 import { uid, normalizeTight } from '../utils/text.js';
 import { writeTextarea, scrollTextareaToRange } from '../utils/dom.js';
+import { findOutlineBlankCandidates } from './outline.js';
 
 /** 원문 토큰과 blanks 배열 동기화 — 등장 순서대로 번호 재정렬 */
 export function syncTemplateAndBlanks(template, currentBlanks = []) {
@@ -46,11 +47,16 @@ export function isAutoBlankExcluded(token, fullText) {
   return false;
 }
 
-/** 자동 빈칸 후보 추출 */
-export function findAutoCandidates(text, existingBlanks) {
+/** 자동 빈칸 후보 추출 — 카드 목차 제목을 우선 포함 */
+export function findAutoCandidates(text, existingBlanks, outline = null) {
   const occupied = new Set(existingBlanks.map((b) => normalizeTight(b.answer)));
-  const re = /[A-Za-z가-힣][A-Za-z가-힣·\-]{1,}/g;
   const seen = new Map();
+
+  for (const [token, index] of findOutlineBlankCandidates(outline, existingBlanks)) {
+    if (!seen.has(token)) seen.set(token, index);
+  }
+
+  const re = /[A-Za-z가-힣][A-Za-z가-힣·\-]{1,}/g;
   let match;
 
   while ((match = re.exec(text)) !== null) {

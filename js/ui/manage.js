@@ -4,16 +4,41 @@ import {
   getActiveUser,
   getUserFolders,
   getCard,
+  getFolder,
   getCardsFiltered,
   countCardsInFolder,
   folderPathNames,
-  buildFolderOptions,
 } from '../domain/queries.js';
+import { buildFolderOptions, fillFolderSelect } from './folder-select.js';
 import { formatProblemHtml, formatPromptHtml } from './prompt.js';
 import { readFilters } from './sidebar.js';
 
+/** 현재 위치 빵부스러기 — 「전체 ▸ 상위 ▸ 현재」, 각 단계 클릭 시 이동 */
+export function renderFolderBreadcrumb() {
+  const el = document.getElementById('folderBreadcrumb');
+  if (!el) return;
+
+  const chain = [];
+  let cur = store.activeFolderId ? getFolder(store.activeFolderId) : null;
+  while (cur) {
+    chain.unshift(cur);
+    cur = cur.parentId ? getFolder(cur.parentId) : null;
+  }
+
+  const rootActive = !store.activeFolderId;
+  const crumbs = [
+    `<button class="crumb${rootActive ? ' active' : ''}" data-action="select-root-folder">전체</button>`,
+    ...chain.map((f, i) => {
+      const last = i === chain.length - 1;
+      return `<span class="crumb-sep">▸</span><button class="crumb${last ? ' active' : ''}" data-action="select-folder" data-id="${f.id}">${escapeHtml(f.name)}</button>`;
+    }),
+  ];
+  el.innerHTML = crumbs.join('');
+}
+
 /** 폴더 트리 렌더 */
 export function renderFolderTree() {
+  renderFolderBreadcrumb();
   const wrap = document.getElementById('folderTree');
   const user = getActiveUser();
   if (!user) {
@@ -48,7 +73,7 @@ function folderNodeHtml(folder, all, userId) {
         </div>
       </div>
       <div class="toolbar">
-        <button class="small ghost" data-action="create-folder" data-parent="${folder.id}">+</button>
+        <button class="small folder-add" data-action="create-folder" data-parent="${folder.id}">+</button>
         <button class="small ghost" data-action="rename-folder" data-id="${folder.id}">✎</button>
         <button class="small danger" data-action="delete-folder" data-id="${folder.id}">×</button>
       </div>
@@ -60,7 +85,7 @@ function folderNodeHtml(folder, all, userId) {
 /** 카드 목록 */
 export function renderCardList() {
   const list = document.getElementById('cardList');
-  const cards = getCardsFiltered(readFilters(), store.activeFolderId);
+  const cards = getCardsFiltered(readFilters(store.activeFolderId));
 
   if (!cards.length) {
     list.innerHTML = '<div class="list-item"><span class="item-sub">카드 없음</span></div>';
@@ -106,7 +131,7 @@ export function renderManageDetail(id) {
         <div><strong>정답</strong><br>${c.blanks.map((b) => `빈칸${b.order}: ${escapeHtml(b.answer)}`).join('<br>') || '없음'}</div>
         <div><strong>메모</strong><br>${escapeHtml(c.memo || '(없음)')}</div>
         <label>폴더 이동</label>
-        <select data-action="move-card-folder" data-card-id="${c.id}">
+        <select data-action="move-card-folder" data-card-id="${c.id}" class="folder-select">
           <option value="">(미분류)</option>${opts}
         </select>
       </div>
@@ -124,12 +149,13 @@ export function renderManageDetail(id) {
 /** 폴더 select 갱신 */
 export function renderFolderSelects() {
   const user = getActiveUser();
-  const opts = user ? buildFolderOptions(user.id) : '';
-  ['cardFolder', 'studyEditFolder'].forEach((id) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    const cur = el.value;
-    el.innerHTML = `<option value="">(미분류)</option>${opts}`;
-    if ([...el.options].some((o) => o.value === cur)) el.value = cur;
+  if (!user) return;
+  fillFolderSelect(document.getElementById('cardFolder'), {
+    value: document.getElementById('cardFolder')?.value,
+    includeUnclassified: true,
+  });
+  fillFolderSelect(document.getElementById('studyEditFolder'), {
+    value: document.getElementById('studyEditFolder')?.value,
+    includeUnclassified: true,
   });
 }

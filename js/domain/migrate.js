@@ -1,5 +1,6 @@
 import { uid, shorten, stripBlankMarkers } from '../utils/text.js';
 import { syncTemplateAndBlanks } from './blank.js';
+import { normalizeOutline } from './outline.js';
 
 /** 빈 초기 상태 — 사용자·카드 없음 */
 export function createDefaultState() {
@@ -11,7 +12,19 @@ export function createDefaultState() {
     cards: [],
     selectedIds: [],
     settings: { gradingThreshold: 80 },
-    ui: { treeExpanded: {}, section: 'manage', sidebarCollapsed: false, studySession: null },
+    ui: {
+      treeExpanded: {}, section: 'manage', sidebarCollapsed: false,
+      outlineSummaryExpanded: false,
+      createSavedSnapshot: '',
+      lastAutoSaveAt: '',
+      lastSavedAt: '',
+      studyConfig: { scope: 'all', order: 'created', folderId: null, flag: 1 },
+      createDraft: null,
+      filterFlag: 'all',
+      filterFolderId: null,
+      studySessions: {},
+      studySession: null,
+    },
   };
 }
 
@@ -75,6 +88,7 @@ export function migrateCard(raw) {
     wrongCount: Number(raw.wrongCount || 0),
     lastResult: raw.lastResult || null,
     isSample: !!raw.isSample,
+    outline: normalizeOutline(raw.outline),
     createdAt: raw.createdAt || new Date().toISOString(),
     updatedAt: raw.updatedAt || new Date().toISOString(),
   };
@@ -98,9 +112,28 @@ export function migrateState(raw) {
     treeExpanded: {},
     section: 'manage',
     sidebarCollapsed: false,
+    outlineSummaryExpanded: false,
+    createSavedSnapshot: '',
+    lastAutoSaveAt: '',
+    lastSavedAt: '',
+    studySession: null,
+    studyConfig: { scope: 'all', order: 'created', folderId: null, flag: 1 },
+    createDraft: null,
+    filterFlag: 'all',
+    filterFolderId: null,
+    studySessions: {},
     studySession: null,
     ...(raw.ui || {}),
   };
+  merged.ui.studyConfig = { scope: 'all', order: 'created', folderId: null, flag: 1, ...(merged.ui.studyConfig || {}) };
+  if (merged.ui.filterFlag == null) merged.ui.filterFlag = 'all';
+  if (merged.ui.filterFolderId === undefined) merged.ui.filterFolderId = null;
+  if (!merged.ui.studySessions) merged.ui.studySessions = {};
+  if (merged.ui.studySession?.cardIds?.length && merged.activeUserId) {
+    if (!merged.ui.studySessions[merged.activeUserId]) {
+      merged.ui.studySessions[merged.activeUserId] = merged.ui.studySession;
+    }
+  }
 
   const validActive = merged.users.some((u) => u.id === merged.activeUserId);
   merged.activeUserId = validActive ? merged.activeUserId : null;
