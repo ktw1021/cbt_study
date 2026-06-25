@@ -61,6 +61,11 @@ export function countCardsInFolder(folderId, userId) {
   return getUserCards(userId).filter((c) => ids.includes(c.folderId)).length;
 }
 
+/** 폴더 미지정(미분류) 카드 수 */
+export function countUnclassifiedCards(userId) {
+  return getUserCards(userId).filter((c) => !c.folderId).length;
+}
+
 /** 하위 폴더 ID 목록 */
 export function getCardsFiltered(filters) {
   const user = getActiveUser();

@@ -268,12 +268,10 @@ function canBlankPeek(order) {
   return !getBlankInputValue(order);
 }
 
-// ── 호버 정답 엿보기 (모를 때 잠깐 보기) ──
+// ── 호버 정답 엿보기 (모를 때 보기) ──
 const PEEK_DELAY_MS = 1500;
-const PEEK_SHOW_MS = 500;
 const PEEK_GAUGE_C = 2 * Math.PI * 8;
 
-let peekHideTimer = null;
 let peekEl = null;
 let peekGaugeEl = null;
 let peekGaugeRaf = null;
@@ -324,7 +322,6 @@ function hidePeekGauge() {
 }
 
 function hidePeek() {
-  clearTimeout(peekHideTimer);
   hidePeekGauge();
   if (peekEl) peekEl.classList.remove('show');
 }
@@ -337,7 +334,6 @@ function showPeekAnswer(input, answer) {
   el.style.left = `${r.left + window.scrollX}px`;
   el.style.top = `${r.top + window.scrollY - 34}px`;
   el.classList.add('show');
-  peekHideTimer = setTimeout(() => el.classList.remove('show'), PEEK_SHOW_MS);
 }
 
 function tickPeekGauge() {
@@ -360,7 +356,7 @@ function tickPeekGauge() {
   peekGaugeRaf = requestAnimationFrame(tickPeekGauge);
 }
 
-/** 빈칸 위 1.5초 호버(게이지) → 정답 잠깐 표시 후 사라짐 */
+/** 빈칸 위 1.5초 호버(게이지) → 정답 표시, 마우스를 떼면 숨김 */
 export function handleBlankPeekOver(e) {
   const input = e.target.closest?.('.blank-field');
   if (!input) return;

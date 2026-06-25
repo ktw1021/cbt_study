@@ -45,6 +45,8 @@ import {
   chipMakeBlank,
   chipRemoveAtCaret,
   chipRemoveByOrder,
+  chipRemoveAll,
+  chipBlankCount,
   chipJump,
   chipApplyTokens,
   readChipEditor,
@@ -317,7 +319,7 @@ export function expandAllTree(expand) {
 }
 
 export async function createFolder(parentId) {
-  const name = prompt('폴더 이름');
+  const name = prompt('새 폴더 이름');
   if (!name?.trim()) return;
   pushUndo();
   const now = new Date().toISOString();
@@ -335,7 +337,7 @@ export async function createFolder(parentId) {
 export async function renameFolder(id) {
   const f = getFolder(id);
   if (!f) return;
-  const name = prompt('새 폴더 이름', f.name);
+  const name = prompt('폴더 이름', f.name);
   if (!name?.trim()) return;
   pushUndo();
   f.name = name.trim();
@@ -359,11 +361,38 @@ export async function deleteFolder(id) {
   renderAll();
 }
 
+/** 폴더 트리 — 다른 폴더 아래(또는 루트)로 이동 */
+export async function moveFolder(folderId, newParentId) {
+  const f = getFolder(folderId);
+  if (!f) return;
+  const userId = getActiveUser().id;
+  const parentId = newParentId || null;
+  if (f.parentId === parentId) return;
+  if (parentId === folderId) return;
+  if (parentId) {
+    const parent = getFolder(parentId);
+    if (!parent || parent.userId !== userId) return;
+    const descendants = getDescendantFolderIds(folderId, userId);
+    if (descendants.includes(parentId)) {
+      alert('하위 폴더 안으로는 옮길 수 없습니다.');
+      return;
+    }
+  }
+  pushUndo();
+  f.parentId = parentId;
+  f.updatedAt = new Date().toISOString();
+  if (parentId) getState().ui.treeExpanded[parentId] = true;
+  await saveState();
+  renderAll();
+}
+
 export async function dropCardOnFolder(cardId, folderId) {
   const card = getCard(cardId);
   if (!card) return;
+  const next = folderId || null;
+  if (card.folderId === next) return;
   pushUndo();
-  card.folderId = folderId;
+  card.folderId = next;
   card.updatedAt = new Date().toISOString();
   await saveState();
   renderAll();
@@ -371,10 +400,16 @@ export async function dropCardOnFolder(cardId, folderId) {
 
 // ── 카드 ──
 
+/** 카드관리에서 선택한 폴더(activeFolderId)를 새 카드 폼 초기값으로 */
+function newCardSeedFromContext() {
+  const folderId = store.activeFolderId || null;
+  return folderId ? { folderId } : null;
+}
+
 /** 카드제작 진입(메뉴) — 작성 중 초안이 있으면 이어쓰기, 없으면 빈 폼 */
 export function goCreate() {
   const draft = getState().ui.createDraft;
-  renderCreateForm(draft || null);
+  renderCreateForm(draft || newCardSeedFromContext());
   showSection('create', { urlExtra: draft?.id ? { cardId: draft.id } : {} });
   syncCreateSavedSnapshotFromForm();
   document.getElementById('cardTitle').focus();
@@ -382,6 +417,7 @@ export function goCreate() {
 
 /** 「새 카드」 — 명시적 새로 만들기. 작성 중 새 카드가 있으면 확인 */
 export function startNewCard() {
+  const alreadyOnCreate = store.currentSection === 'create';
   const draft = getState().ui.createDraft;
   if (draft && !draft.id) {
     if (!confirm('작성 중인 새 카드가 있습니다. 비우고 새로 시작할까요?\n(취소 = 이어쓰기)')) {
@@ -391,7 +427,9 @@ export function startNewCard() {
   }
   getState().ui.createDraft = null;
   persist();
-  renderCreateForm(null);
+  // 카드제작 화면에서 다시 「새 카드」→ 완전 초기화. 관리 등에서 진입할 때만 폴더 컨텍스트 반영
+  const seed = alreadyOnCreate ? null : newCardSeedFromContext();
+  renderCreateForm(seed);
   showSection('create', { urlExtra: {} });
   syncCreateSavedSnapshotFromForm();
   document.getElementById('cardTitle').focus();
@@ -587,6 +625,16 @@ export function removeBlankFromSelection(editorId) {
 export function removeBlankByOrder(editorId, order) {
   if (!order) return;
   chipRemoveByOrder(editorId, order);
+}
+
+/** 해설 빈칸 전체 해제 — 처음부터 다시 만들 때 */
+export function removeAllBlanks(editorId) {
+  const count = chipBlankCount(editorId);
+  if (!count) return alert('해제할 빈칸이 없습니다.');
+  if (!confirm(`빈칸 ${count}개를 모두 해제할까요?\n정답은 해설 본문으로 돌아갑니다.`)) return;
+  chipRemoveAll(editorId);
+  if (editorId === 'explanationTemplate') onCreateInput();
+  else if (editorId === 'studyEditExplanation') onStudyEditInput();
 }
 
 export function jumpToBlank(editorId, order) {

@@ -290,6 +290,14 @@
 .study-preview-title { flex: 1; min-width: 0; font-weight: 600; }
 .study-preview-meta { font-size: 12px; color: var(--muted, #64748b); flex-shrink: 0; }
 
+/* ── 카드관리 — 폴더·목록 | 상세 (폴더 쪽 넓게) ── */
+.manage-split {
+  display: grid;
+  grid-template-columns: 5.5fr 4.5fr;
+  gap: 14px;
+  margin-top: 12px;
+}
+
 /* ── 카드관리 폴더 빵부스러기 ── */
 .folder-root-title { cursor: pointer; }
 .folder-root-title:hover { color: var(--blue, #2563eb); }
@@ -310,10 +318,15 @@
   border-radius: 6px;
   color: var(--muted, #64748b);
   cursor: pointer;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
 }
 
+.folder-breadcrumb .crumb-label { font-size: 13px; }
 .folder-breadcrumb .crumb:hover { background: rgba(37, 99, 235, 0.08); color: var(--blue, #2563eb); }
-.folder-breadcrumb .crumb.active { color: var(--ink, #1e293b); font-weight: 700; }
+.folder-breadcrumb .crumb:hover .tree-meta { color: var(--muted); }
+.folder-breadcrumb .crumb.active .crumb-label { color: var(--ink, #1e293b); font-weight: 700; }
 .folder-breadcrumb .crumb-sep { color: #cbd5e1; }
 
 .between {
@@ -437,6 +450,13 @@ button.nav-btn.pink-nav.active { background: var(--pink); color: #fff; }
 .list-item:last-child { border-bottom: 0; }
 .list-item.active { background: #eff6ff; }
 .list-item.dragging { opacity: 0.5; }
+
+/* 카드 끌기 — 글자 선택 대신 드래그 */
+#cardList .list-item[draggable="true"] {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: grab;
+}
 
 .item-title { font-size: 13px; font-weight: 700; }
 .item-sub { font-size: 12px; color: var(--muted); }
@@ -788,15 +808,30 @@ select.folder-select {
   margin: 0 4px 4px 0;
 }
 
-.tree-root { display: flex; flex-direction: column; gap: 4px; }
+.tree-root { display: flex; flex-direction: column; gap: 4px; min-height: 64px; }
 .tree-node { border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 6px 8px; }
 .tree-node.active { background: #eff6ff; border-color: #93c5fd; }
 .tree-node.drop-target { outline: 2px dashed var(--blue); background: #eff6ff; }
+.tree-node.folder-dragging { opacity: 0.5; }
+.folder-panel.drop-target-root {
+  outline: 2px dashed var(--blue);
+  background: rgba(239, 246, 255, 0.55);
+}
+.folder-breadcrumb .crumb.drop-target {
+  background: rgba(37, 99, 235, 0.08);
+  color: var(--blue, #2563eb);
+  border-radius: 6px;
+}
 .tree-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .tree-left { display: flex; align-items: center; gap: 6px; min-width: 0; flex: 1; }
+.tree-left[data-action="select-folder"] { cursor: pointer; }
+.tree-left[data-drag-folder] { cursor: grab; }
+.tree-label { min-width: 0; flex: 1; }
 .tree-toggle { width: 24px; height: 24px; border-radius: 6px; border: 1px solid var(--line); background: #fff; font-size: 11px; cursor: pointer; flex-shrink: 0; }
-.tree-title { font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.tree-title { font-weight: 700; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-meta { font-size: 11px; color: var(--muted); }
+.tree-root,
+.folder-breadcrumb { user-select: none; -webkit-user-select: none; }
 .tree-children { margin: 4px 0 0 16px; display: flex; flex-direction: column; gap: 4px; }
 
 .study-prompt { white-space: pre-wrap; line-height: 2.1; font-size: 17px; padding-bottom: 16px; }

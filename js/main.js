@@ -19,6 +19,7 @@ import { saveStudySession } from './services/study-session.js';
 import { syncThresholdControls, setGradingThreshold } from './ui/study.js';
 import { handleOutlineModalAction, closeOutlineModal, isOutlineModalOpen } from './ui/outline-modal.js';
 import { toggleOutlineSummary } from './ui/create.js';
+import { actionGuardKey, runGuardedClick } from './utils/action-guard.js';
 
 /** hash → 화면 (뒤로가기) */
 function handleHashRoute(fromInit = false) {
@@ -130,19 +131,83 @@ function bindEvents() {
   document.addEventListener('mouseout', actions.handleBlankPeekOut);
   initCaretAutoscroll();
 
-  document.getElementById('folderTree').addEventListener('dragover', (e) => {
-    const node = e.target.closest('[data-folder-id]');
-    if (node) { e.preventDefault(); node.classList.add('drop-target'); }
+  const folderTree = document.getElementById('folderTree');
+  const folderPanel = document.getElementById('folderPanel');
+
+  const isCardDrag = (dt) => [...dt.types].includes('text/card-id');
+  const isFolderDrag = (dt) => [...dt.types].includes('text/folder-id');
+  const onFolderNode = (el) => el?.closest('[data-folder-id]');
+
+  const clearDropTargets = () => {
+    document.querySelectorAll('.tree-node.drop-target, .folder-panel.drop-target-root')
+      .forEach((n) => n.classList.remove('drop-target', 'drop-target-root'));
+  };
+
+  /** 폴더 패널 빈 배경 — 카드 미분류 · 폴더 루트 이동 (개별 폴더 행 제외) */
+  folderPanel.addEventListener('dragover', (e) => {
+    if (onFolderNode(e.target)) return;
+    if (!isCardDrag(e.dataTransfer) && !isFolderDrag(e.dataTransfer)) return;
+    e.preventDefault();
+    clearDropTargets();
+    folderPanel.classList.add('drop-target-root');
   });
-  document.getElementById('folderTree').addEventListener('dragleave', (e) => {
-    const node = e.target.closest('[data-folder-id]');
-    if (node) node.classList.remove('drop-target');
+  folderPanel.addEventListener('dragleave', (e) => {
+    if (folderPanel.contains(e.relatedTarget) && !onFolderNode(e.relatedTarget)) return;
+    folderPanel.classList.remove('drop-target-root');
   });
-  document.getElementById('folderTree').addEventListener('drop', (e) => {
+  folderPanel.addEventListener('drop', (e) => {
+    if (onFolderNode(e.target)) return;
+    e.preventDefault();
+    clearDropTargets();
+    const folderDragId = e.dataTransfer.getData('text/folder-id');
+    if (folderDragId) {
+      actions.moveFolder(folderDragId, null);
+      return;
+    }
+    const cardId = e.dataTransfer.getData('text/card-id');
+    if (cardId) actions.dropCardOnFolder(cardId, null);
+  });
+
+  folderTree.addEventListener('dragstart', (e) => {
+    if (e.target.closest('[data-action="toggle-tree"]')) {
+      e.preventDefault();
+      return;
+    }
+    const hit = e.target.closest('[data-drag-folder]');
+    if (!hit) return;
+    e.dataTransfer.setData('text/folder-id', hit.dataset.dragFolder);
+    e.dataTransfer.effectAllowed = 'move';
+    hit.closest('.tree-node')?.classList.add('folder-dragging');
+    window.getSelection()?.removeAllRanges();
+  });
+  folderTree.addEventListener('dragend', () => {
+    document.querySelectorAll('.tree-node.folder-dragging').forEach((n) => n.classList.remove('folder-dragging'));
+    clearDropTargets();
+  });
+
+  folderTree.addEventListener('dragover', (e) => {
+    if (![...e.dataTransfer.types].includes('text/folder-id')
+      && ![...e.dataTransfer.types].includes('text/card-id')) return;
     const node = e.target.closest('[data-folder-id]');
     if (!node) return;
     e.preventDefault();
-    node.classList.remove('drop-target');
+    clearDropTargets();
+    node.classList.add('drop-target');
+  });
+  folderTree.addEventListener('dragleave', (e) => {
+    const node = e.target.closest('[data-folder-id]');
+    if (node && !node.contains(e.relatedTarget)) node.classList.remove('drop-target');
+  });
+  folderTree.addEventListener('drop', (e) => {
+    const node = e.target.closest('[data-folder-id]');
+    if (!node) return;
+    e.preventDefault();
+    clearDropTargets();
+    const folderDragId = e.dataTransfer.getData('text/folder-id');
+    if (folderDragId) {
+      actions.moveFolder(folderDragId, node.dataset.folderId);
+      return;
+    }
     const cardId = e.dataTransfer.getData('text/card-id');
     if (cardId) actions.dropCardOnFolder(cardId, node.dataset.folderId);
   });
@@ -150,11 +215,15 @@ function bindEvents() {
   document.getElementById('cardList').addEventListener('dragstart', (e) => {
     const item = e.target.closest('[data-drag-card]');
     if (!item) return;
-    e.dataTransfer.setData('text/card-id', item.dataset.dragCard);
+    const id = item.dataset.dragCard;
+    e.dataTransfer.setData('text/card-id', id);
+    e.dataTransfer.effectAllowed = 'move';
     item.classList.add('dragging');
+    window.getSelection()?.removeAllRanges();
   });
   document.getElementById('cardList').addEventListener('dragend', (e) => {
     e.target.closest('[data-drag-card]')?.classList.remove('dragging');
+    clearDropTargets();
   });
 }
 
@@ -218,6 +287,7 @@ function onClick(e) {
     'remove-blank-order': () => actions.removeBlankByOrder(btn.dataset.editor, Number(btn.dataset.order)),
     'jump-blank': () => actions.jumpToBlank(btn.dataset.editor, Number(btn.dataset.order)),
     'auto-blank': () => actions.openAutoBlank(btn.dataset.editor),
+    'remove-all-blanks': () => actions.removeAllBlanks(btn.dataset.editor),
     'quick-auto-blank': () => actions.confirmQuickAutoBlank(btn.dataset.editor, Number(btn.dataset.limit || 5)),
     'outline-blank-all': () => actions.applyOutlineBlanksAll(),
     'outline-blank-selected': () => actions.applyOutlineBlanksSelected(),
@@ -265,14 +335,16 @@ function onClick(e) {
   if (isOutlineModalOpen() && btn.closest('.outline-modal')) {
     if (map[action]) {
       e.preventDefault();
-      map[action]();
+      const key = actionGuardKey(action, btn);
+      runGuardedClick(key, () => map[action]());
     }
     return;
   }
 
   if (map[action]) {
     e.preventDefault();
-    map[action]();
+    const key = actionGuardKey(action, btn);
+    runGuardedClick(key, () => map[action]());
   }
 }
 
@@ -324,7 +396,9 @@ function onKeydown(e) {
   if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 's') {
     // 브라우저 기본 저장(페이지 저장) 막고, 카드제작은 바로 저장
     e.preventDefault();
-    if (store.currentSection === 'create') actions.saveCard();
+    if (store.currentSection === 'create') {
+      runGuardedClick('save-card', () => actions.saveCard());
+    }
     return;
   }
 

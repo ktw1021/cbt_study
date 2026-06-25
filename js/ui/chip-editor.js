@@ -294,6 +294,25 @@ export function chipRemoveByOrder(id, order) {
   if (chip) chipRemoveEl(chip);
 }
 
+/** 에디터 내 빈칸(칩) 개수 */
+export function chipBlankCount(id) {
+  const el = document.getElementById(id);
+  return el ? el.querySelectorAll(`.${CHIP_CLASS}`).length : 0;
+}
+
+/** 모든 빈칸(칩) 해제 — 정답을 본문 텍스트로 복구 */
+export function chipRemoveAll(id) {
+  const el = document.getElementById(id);
+  if (!el) return 0;
+  const chips = [...el.querySelectorAll(`.${CHIP_CLASS}`)];
+  if (!chips.length) return 0;
+  chips.forEach((chip) => {
+    chip.replaceWith(document.createTextNode(chip.dataset.answer || ''));
+  });
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  return chips.length;
+}
+
 /** 현재 커서/선택 위치 주변의 칩 제거 (툴바 "빈칸 해제") */
 export function chipRemoveAtCaret(id) {
   const el = document.getElementById(id);

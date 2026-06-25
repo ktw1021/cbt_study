@@ -7,6 +7,8 @@ import {
   getFolder,
   getCardsFiltered,
   countCardsInFolder,
+  countUnclassifiedCards,
+  getUserCards,
   folderPathNames,
 } from '../domain/queries.js';
 import { buildFolderOptions, fillFolderSelect } from './folder-select.js';
@@ -26,8 +28,11 @@ export function renderFolderBreadcrumb() {
   }
 
   const rootActive = !store.activeFolderId;
+  const user = getActiveUser();
+  const totalCards = user ? getUserCards(user.id).length : 0;
+  const unclassified = user ? countUnclassifiedCards(user.id) : 0;
   const crumbs = [
-    `<button class="crumb${rootActive ? ' active' : ''}" data-action="select-root-folder">전체</button>`,
+    `<button class="crumb${rootActive ? ' active' : ''}" data-action="select-root-folder"><span class="crumb-label">전체</span><span class="tree-meta">카드 ${totalCards}개 · 미분류 ${unclassified}개</span></button>`,
     ...chain.map((f, i) => {
       const last = i === chain.length - 1;
       return `<span class="crumb-sep">▸</span><button class="crumb${last ? ' active' : ''}" data-action="select-folder" data-id="${f.id}">${escapeHtml(f.name)}</button>`;
@@ -65,9 +70,9 @@ function folderNodeHtml(folder, all, userId) {
 
   return `<div class="tree-node ${active ? 'active' : ''}" data-folder-id="${folder.id}">
     <div class="tree-row">
-      <div class="tree-left">
-        <button class="tree-toggle" data-action="toggle-tree" data-id="${folder.id}">${kids.length ? (expanded ? '▾' : '▸') : '·'}</button>
-        <div data-action="select-folder" data-id="${folder.id}" style="min-width:0;cursor:pointer">
+      <div class="tree-left" draggable="true" data-drag-folder="${folder.id}" data-action="select-folder" data-id="${folder.id}">
+        <button type="button" class="tree-toggle" draggable="false" data-action="toggle-tree" data-id="${folder.id}">${kids.length ? (expanded ? '▾' : '▸') : '·'}</button>
+        <div class="tree-label">
           <div class="tree-title">${escapeHtml(folder.name)}</div>
           <div class="tree-meta">카드 ${cnt}개</div>
         </div>
