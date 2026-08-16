@@ -1,11 +1,15 @@
 import { store } from '../core/store.js';
-import { escapeHtml, splitAnswers, shorten } from '../utils/text.js';
+import { escapeHtml, shorten } from '../utils/text.js';
 import { getState } from '../core/store.js';
 import { folderPathNames, buildStudyQueue, getFolder } from '../domain/queries.js';
+import { acceptedAnswers } from '../domain/blank.js';
 import { loadCardProgress, getPersistedStudySession } from '../services/study-session.js';
 import { renderResumePanel } from './resume-panel.js';
 import { formatProblemHtml, formatStudyExplanationHtml } from './prompt.js';
 import { renderStudyEditForm } from './create.js';
+import { getBlankInputValue, syncDraftFromDOM } from './blank-input.js';
+
+export { getBlankInputValue, syncDraftFromDOM };
 
 const SCOPE_LABEL = { all: '전체 카드', folder: '폴더', selected: '선택 카드', wrong: '최근 오답', flag: '플래그' };
 const ORDER_LABEL = { created: '만든 순서', 'low-rounds': '회독 낮은 순', random: '랜덤' };
@@ -165,6 +169,7 @@ export function renderStudyCard() {
         order: b.order, checked: false, correct: false, score: 0, user: '', revealed: false,
       }));
       store.studyAttemptRecorded = false;
+      store.studyRoundRecorded = false;
       store.currentBlankFocus = null;
     } else {
       const nextOrder = store.currentBlankFocus
@@ -202,14 +207,6 @@ export function paintInlineBlanks(statuses) {
   });
 }
 
-/** DOM 입력값 → 모델 흡수 (단일 출처 유지). 채점 여부와 무관하게 현재 입력을 보존 — 채점 후에도 수정·삭제 가능 */
-export function syncDraftFromDOM() {
-  store.currentBlankStatuses.forEach((s) => {
-    const input = document.querySelector(`[data-blank-order="${s.order}"]`);
-    if (input) s.user = input.value;
-  });
-}
-
 export function refreshStudyViews({ focusOrder } = {}) {
   const c = store.studyQueue[store.studyIndex];
   if (!c) return;
@@ -240,10 +237,6 @@ export function focusBlankUI(order) {
   paintInlineBlanks(store.currentBlankStatuses);
 }
 
-export function getBlankInputValue(order) {
-  return document.querySelector(`[data-blank-order="${order}"]`)?.value?.trim() || '';
-}
-
 /** 채점 후 답을 지우거나 바꾸면 해당 칸만 다시 풀기 상태로 */
 export function resetBlankGradeIfEdited(order, value) {
   const st = store.currentBlankStatuses.find((s) => s.order === order);
@@ -262,14 +255,10 @@ export function resetBlankGradeIfEdited(order, value) {
   return true;
 }
 
-function canBlankPeek(order) {
-  const st = store.currentBlankStatuses.find((s) => s.order === order);
-  if (!st?.checked) return true;
-  return !getBlankInputValue(order);
-}
-
 // ── 호버 정답 엿보기 (모를 때 보기) ──
+// 채점 전후 모두 열어둔다. 볼지 말지는 사용자가 정하고, 대기 게이지가 그 문턱 역할을 한다.
 const PEEK_DELAY_MS = 1500;
+const PEEK_DELAY_GRADED_MS = 300;
 const PEEK_GAUGE_C = 2 * Math.PI * 8;
 
 let peekEl = null;
@@ -277,6 +266,20 @@ let peekGaugeEl = null;
 let peekGaugeRaf = null;
 let peekTargetInput = null;
 let peekStartTime = 0;
+let peekDelayMs = PEEK_DELAY_MS;
+
+/** 인정되는 답(주 정답 + 동의어)을 모두 표시 */
+function peekAnswerText(order) {
+  const c = store.studyQueue[store.studyIndex];
+  const blank = c?.blanks.find((b) => b.order === order);
+  return acceptedAnswers(blank).join(' / ');
+}
+
+/** 채점이 끝난 빈칸은 확인이 목적이므로 대기를 짧게 */
+function peekDelayFor(order) {
+  const st = store.currentBlankStatuses.find((s) => s.order === order);
+  return st?.checked ? PEEK_DELAY_GRADED_MS : PEEK_DELAY_MS;
+}
 
 function ensurePeekEl() {
   if (peekEl) return peekEl;
@@ -339,7 +342,7 @@ function showPeekAnswer(input, answer) {
 function tickPeekGauge() {
   if (!peekTargetInput) return;
   const elapsed = Date.now() - peekStartTime;
-  const progress = elapsed / PEEK_DELAY_MS;
+  const progress = elapsed / peekDelayMs;
   setPeekGaugeProgress(progress);
   ensurePeekGaugeEl().classList.add('show');
 
@@ -347,30 +350,25 @@ function tickPeekGauge() {
     peekGaugeRaf = null;
     ensurePeekGaugeEl().classList.add('ready');
     const order = Number(peekTargetInput.dataset.blankOrder);
-    const c = store.studyQueue[store.studyIndex];
-    const blank = c?.blanks.find((b) => b.order === order);
-    const answer = splitAnswers(blank?.answer)[0] || '';
+    const answer = peekAnswerText(order);
     if (answer) showPeekAnswer(peekTargetInput, answer);
     return;
   }
   peekGaugeRaf = requestAnimationFrame(tickPeekGauge);
 }
 
-/** 빈칸 위 1.5초 호버(게이지) → 정답 표시, 마우스를 떼면 숨김 */
+/** 빈칸 위 호버(게이지) → 정답 표시, 마우스를 떼면 숨김 */
 export function handleBlankPeekOver(e) {
   const input = e.target.closest?.('.blank-field');
   if (!input) return;
   const order = Number(input.dataset.blankOrder);
-  if (!canBlankPeek(order)) return;
-  const c = store.studyQueue[store.studyIndex];
-  const blank = c?.blanks.find((b) => b.order === order);
-  const answer = splitAnswers(blank?.answer)[0] || '';
-  if (!answer) return;
+  if (!peekAnswerText(order)) return;
 
   if (peekTargetInput === input && peekGaugeRaf) return;
 
   hidePeek();
   peekTargetInput = input;
+  peekDelayMs = peekDelayFor(order);
   peekStartTime = Date.now();
   positionPeekGauge(input);
   setPeekGaugeProgress(0);
@@ -382,7 +380,26 @@ export function handleBlankPeekOut(e) {
   hidePeek();
 }
 
-/** @deprecated — 인라인 방식으로 대체 */
-export function paintStatuses() { paintInlineBlanks(store.currentBlankStatuses); }
-export function refreshStudyPrompt() { refreshStudyViews(); }
-export function renderReveal() {}
+/**
+ * 회독 성공 토스트 — 마지막으로 채점된 빈칸 옆에 떴다가 위로 사라진다.
+ * 애니메이션이 끝나면 resolve하므로 호출부에서 다음 단계를 이어 붙일 수 있다.
+ */
+export function showRoundToast(order, text = '+1 회독 성공') {
+  const anchor = document.getElementById(`blankWrap${order}`)
+    || document.querySelector(`[data-blank-order="${order}"]`);
+  if (!anchor) return Promise.resolve();
+
+  const el = document.createElement('div');
+  el.className = 'round-toast';
+  el.textContent = text;
+  const r = anchor.getBoundingClientRect();
+  el.style.left = `${r.right + window.scrollX + 8}px`;
+  el.style.top = `${r.top + window.scrollY}px`;
+  document.body.appendChild(el);
+
+  return new Promise((resolve) => {
+    const done = () => { el.remove(); resolve(); };
+    el.addEventListener('animationend', done, { once: true });
+    setTimeout(done, 1600);
+  });
+}

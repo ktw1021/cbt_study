@@ -23,11 +23,6 @@ export function getResumeStudyDetail(sess) {
   return title ? `${top}\n${title}` : top;
 }
 
-const MOUNTS = [
-  { mountId: 'sidebarResumeMount', variant: 'sidebar' },
-  { mountId: 'studyResumeMount', variant: 'study' },
-];
-
 function resumePanelHtml(variant, detail) {
   const htmlDetail = escapeHtml(detail).replace(/\n/g, '<br>');
   return `
@@ -45,11 +40,4 @@ export function renderResumePanel({ mountId, variant, sess }) {
   const has = !!sess?.cardIds?.length;
   mount.classList.toggle('hidden', !has);
   mount.innerHTML = has ? resumePanelHtml(variant, getResumeStudyDetail(sess)) : '';
-}
-
-/** 등록된 모든 이어서 학습 마운트 갱신 */
-export function renderAllResumePanels(sess) {
-  for (const { mountId, variant } of MOUNTS) {
-    renderResumePanel({ mountId, variant, sess });
-  }
 }

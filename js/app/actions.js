@@ -18,14 +18,13 @@ import {
   findUserByName,
   normalizeUserName,
 } from '../domain/queries.js';
-import { findAutoCandidates } from '../domain/blank.js';
+import { findAutoCandidates, acceptedAnswers } from '../domain/blank.js';
 import { findOutlineBlankCandidates, listOutlineTokens, normalizeOutline } from '../domain/outline.js';
 import { normalizeTight } from '../utils/text.js';
 import { pushUndo, undo, hasUndo } from '../services/undo.js';
 import { checkAnswer } from '../services/grading.js';
 import { exportData, importFromFile } from '../services/import-export.js';
 import { saveStudySession, snapshotCurrentCardProgress, getPersistedStudySession, setPersistedStudySession } from '../services/study-session.js';
-import { splitAnswers } from '../utils/text.js';
 import { showSection } from '../ui/router.js';
 import {
   renderAll,
@@ -34,6 +33,7 @@ import {
 } from '../ui/render.js';
 import {
   readCreateForm,
+  makeCreateSnapshot,
   renderCreatePreview,
   renderStudyEditPreview,
   renderStudyEditForm,
@@ -64,7 +64,9 @@ import {
   handleBlankPeekOut,
   resetBlankGradeIfEdited,
   getGradingThreshold,
+  showRoundToast,
 } from '../ui/study.js';
+import { openChoice } from '../ui/choice-modal.js';
 import { openAutoBlankModal, closeModal, getSelectedAutoTokens } from '../ui/modal.js';
 import { openOutlineModal, handleOutlineModalAction, closeOutlineModal } from '../ui/outline-modal.js';
 import { openStudyFolderPicker, openStudyCardPicker, openExportFolderPicker } from '../ui/pickers.js';
@@ -472,26 +474,6 @@ export function updateCreateSaveStamp() {
   }
 }
 
-function makeCreateSnapshot(draft) {
-  const d = draft || {};
-  const outline = d.outline?.items?.length ? d.outline : null;
-  return JSON.stringify({
-    id: d.id || '',
-    folderId: d.folderId || null,
-    title: d.title || '',
-    flagColor: Number(d.flagColor) || 0,
-    displayText: d.displayText || '',
-    explanationText: d.explanationText || '',
-    memo: d.memo || '',
-    outline,
-    blanks: (d.blanks || []).map((b) => ({
-      order: Number(b.order) || 0,
-      answer: String(b.answer || ''),
-      aliases: b.aliases || [],
-    })),
-  });
-}
-
 async function saveCardWithOptions({ silent = false } = {}) {
   const draft = readCreateForm();
   if (!draft.displayText.trim()) return alert('문제를 입력하세요.');
@@ -567,13 +549,12 @@ export async function deleteCurrentCard() {
     renderCreateForm(null);
     return;
   }
-  if (!confirm('이 카드를 삭제할까요?')) return;
   await deleteCardById(id);
   renderCreateForm(null);
 }
 
 export async function deleteCardById(id) {
-  if (!confirm('삭제할까요?')) return;
+  if (!confirm('이 카드를 삭제할까요?')) return;
   pushUndo();
   const state = getState();
   state.cards = state.cards.filter((c) => c.id !== id);
@@ -754,6 +735,8 @@ export function clearStudySession() {
   store.studyIndex = 0;
   store._studyCardId = null;
   store.currentBlankStatuses = [];
+  store.studyAttemptRecorded = false;
+  store.studyRoundRecorded = false;
 }
 
 /** 저장된 학습 큐 복원 — index 생략 시 세션에 저장된 카드 위치 사용 (기본값 0 금지) */
@@ -913,7 +896,7 @@ export async function gradeBlankOnEnter(order) {
 
   const threshold = getGradingThreshold();
   const blank = c.blanks.find((b) => b.order === order);
-  const { correct, score } = checkAnswer(user, splitAnswers(blank?.answer || ''), threshold);
+  const { correct, score } = checkAnswer(user, acceptedAnswers(blank), threshold);
 
   let st = store.currentBlankStatuses.find((s) => s.order === order);
   if (!st) return;
@@ -928,8 +911,9 @@ export async function gradeBlankOnEnter(order) {
     blank.lastResult = correct ? 'correct' : 'wrong';
   }
 
+  let roundedUp = false;
   if (store.currentBlankStatuses.every((s) => s.checked)) {
-    applyCardResult(c, store.currentBlankStatuses);
+    roundedUp = applyCardResult(c, store.currentBlankStatuses);
   }
 
   refreshStudyViews({ focusOrder: order });
@@ -941,6 +925,8 @@ export async function gradeBlankOnEnter(order) {
 
   saveStudySession();
   await persist();
+
+  if (roundedUp) await celebrateRound(c, order);
 }
 
 export async function gradeCurrent() {
@@ -951,63 +937,101 @@ export async function gradeCurrent() {
 
   store.currentBlankStatuses = c.blanks.map((b) => {
     const user = getBlankInputValue(b.order);
-    const { correct, score } = checkAnswer(user, splitAnswers(b.answer), threshold);
+    const { correct, score } = checkAnswer(user, acceptedAnswers(b), threshold);
     b.lastInput = user;
     b.lastResult = correct ? 'correct' : 'wrong';
     return { order: b.order, checked: true, correct, score, user, revealed: true };
   });
 
-  applyCardResult(c, store.currentBlankStatuses);
+  const roundedUp = applyCardResult(c, store.currentBlankStatuses);
   refreshStudyViews();
   const ok = store.currentBlankStatuses.filter((s) => s.correct).length;
   document.getElementById('gradeResult').textContent = `전체 채점 ${ok}/${store.currentBlankStatuses.length}`;
   saveStudySession();
   await persist();
   renderAll();
+
+  if (roundedUp) {
+    const lastOrder = store.currentBlankStatuses[store.currentBlankStatuses.length - 1]?.order;
+    await celebrateRound(c, lastOrder);
+  }
 }
 
+/**
+ * 카드 1회 시도 결과 반영.
+ * lastResult는 '지금 상태'라 매번 갱신하고, 누적 카운터(rounds·wrongCount)는
+ * 시도당 1회만 올린다. 「다시 풀기」로 시도가 리셋되면 다시 집계된다.
+ * @returns {boolean} 이번 호출로 회독이 올라갔는지
+ */
 function applyCardResult(c, statuses) {
   const allCorrect = statuses.every((s) => s.correct);
   c.lastResult = allCorrect ? 'correct' : 'wrong';
-  if (!allCorrect) c.wrongCount = (c.wrongCount || 0) + 1;
-  store.studyAttemptRecorded = true;
-}
 
-export async function markSingleBlank(order, isCorrect) {
-  const c = store.studyQueue[store.studyIndex];
-  if (!c) return;
-  pushUndo();
-  const user = getBlankInputValue(order);
-  const st = store.currentBlankStatuses.find((s) => s.order === order);
-  if (!st) return;
-  st.checked = true;
-  st.correct = isCorrect;
-  st.score = isCorrect ? 100 : 0;
-  st.user = user;
-  st.revealed = true;
-  const blank = c.blanks.find((b) => b.order === order);
-  if (blank) {
-    blank.lastInput = user;
-    blank.lastResult = isCorrect ? 'correct' : 'wrong';
-    blank.manualResult = isCorrect ? 'correct' : 'wrong';
+  if (!allCorrect) {
+    if (!store.studyAttemptRecorded) c.wrongCount = (c.wrongCount || 0) + 1;
+    store.studyAttemptRecorded = true;
+    return false;
   }
-  if (store.currentBlankStatuses.every((s) => s.checked)) applyCardResult(c, store.currentBlankStatuses);
-  refreshStudyViews();
-  await persist();
+
+  store.studyAttemptRecorded = true;
+  if (store.studyRoundRecorded) return false;
+  store.studyRoundRecorded = true;
+  c.rounds = Math.max(0, (c.rounds || 0) + 1);
+  c.updatedAt = new Date().toISOString();
+  return true;
 }
 
-export async function markCardAll(isCorrect) {
-  const c = store.studyQueue[store.studyIndex];
-  if (!c) return;
-  pushUndo();
-  store.currentBlankStatuses = c.blanks.map((b) => ({
-    order: b.order, checked: true, correct: isCorrect, score: isCorrect ? 100 : 0,
-    user: getBlankInputValue(b.order), revealed: true,
-  }));
-  applyCardResult(c, store.currentBlankStatuses);
-  refreshStudyViews();
-  document.getElementById('gradeResult').textContent = isCorrect ? '전체 정답 처리' : '전체 오답 처리';
+/** 회독 +1 알림 → 다음 문제(또는 세트 완료) 안내 */
+async function celebrateRound(card, order) {
+  renderAll();
+  await showRoundToast(order);
+  await promptAfterRound(card);
+}
+
+/** 토스트가 뜬 사이 답을 고쳤을 수 있으므로 다시 확인하고 안내한다 */
+async function promptAfterRound(card) {
+  if (store.studyQueue[store.studyIndex]?.id !== card.id) return;
+  const statuses = store.currentBlankStatuses;
+  if (!statuses.length || !statuses.every((s) => s.checked && s.correct)) return;
+
+  if (store.studyIndex >= store.studyQueue.length - 1) {
+    await finishStudySet({ completed: true });
+    return;
+  }
+
+  const pick = await openChoice({
+    title: '다음 문제로 넘어가시겠습니까?',
+    message: `${store.studyIndex + 1}/${store.studyQueue.length}장 완료`,
+    choices: [
+      { value: 'next', label: '확인' },
+      { value: null, label: '취소' },
+    ],
+  });
+  if (pick === 'next') nextCard();
+}
+
+/** 학습 세트의 끝 — 다음 행동을 고르게 하고, 화면을 떠날 때만 저장된 진행을 정리 */
+async function finishStudySet({ completed = false } = {}) {
+  if (!store.studyQueue.length) return;
+  const total = store.studyQueue.length;
+
+  const pick = await openChoice({
+    title: completed ? '학습을 모두 마쳤습니다' : '마지막 문제입니다',
+    message: completed
+      ? `${total}장을 끝냈습니다. 이어서 무엇을 할까요?`
+      : `${total}장 중 마지막입니다. 지금 학습을 마칠까요?`,
+    choices: [
+      { value: 'manage', label: '홈으로' },
+      { value: 'study', label: '학습모드로' },
+      { value: null, label: '취소' },
+    ],
+  });
+  if (!pick) return;
+
+  clearStudySession();
   await persist();
+  showSection(pick === 'manage' ? 'manage' : 'study');
+  renderStudyCard();
   renderAll();
 }
 
@@ -1018,6 +1042,7 @@ export function hideAnswers() {
     order: b.order, checked: false, correct: false, score: 0, user: '', revealed: false,
   }));
   store.studyAttemptRecorded = false;
+  store.studyRoundRecorded = false;
   store._studyCardId = c.id;
   saveStudySession();
   renderStudyCard();
@@ -1083,16 +1108,18 @@ export function prevCard() {
 }
 
 export function nextCard() {
-  if (store.studyIndex < store.studyQueue.length - 1) {
-    snapshotCurrentCardProgress();
-    store.studyIndex++;
-    store._studyCardId = null;
-    store.currentBlankStatuses = [];
-    saveStudySession();
-    persist();
-    renderStudyCard();
-    showSection('study-play', { urlExtra: { index: store.studyIndex }, replaceUrl: true });
+  if (store.studyIndex >= store.studyQueue.length - 1) {
+    finishStudySet();
+    return;
   }
+  snapshotCurrentCardProgress();
+  store.studyIndex++;
+  store._studyCardId = null;
+  store.currentBlankStatuses = [];
+  saveStudySession();
+  persist();
+  renderStudyCard();
+  showSection('study-play', { urlExtra: { index: store.studyIndex }, replaceUrl: true });
 }
 
 // ── 플래그·Undo·Import/Export ──

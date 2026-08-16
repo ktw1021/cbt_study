@@ -7,7 +7,16 @@
  *   읽을 때 토큰→칩, 저장할 때 칩→토큰으로 변환만 한다(데이터 호환).
  */
 import { syncTemplateAndBlanks } from '../domain/blank.js';
-import { normalizeTight } from '../utils/text.js';
+import { normalizeTight, splitAnswers } from '../utils/text.js';
+
+/** 동의어는 칩 dataset에 `||`로 이어 담고, 읽을 때 배열로 되돌린다 */
+export const ALIAS_SEP = ' || ';
+export function formatAliases(list) {
+  return (list || []).filter(Boolean).join(ALIAS_SEP);
+}
+export function parseAliases(text) {
+  return splitAnswers(text);
+}
 
 const CHIP_CLASS = 'cz-chip';
 const initialized = new Set();
@@ -70,11 +79,12 @@ function isChip(node) {
   return node && node.nodeType === 1 && node.classList && node.classList.contains(CHIP_CLASS);
 }
 
-function makeChipEl(answer) {
+function makeChipEl(answer, aliases = []) {
   const span = document.createElement('span');
   span.className = CHIP_CLASS;
   span.contentEditable = 'false';
   span.dataset.answer = answer || '';
+  span.dataset.aliases = formatAliases(aliases);
   span.appendChild(document.createTextNode(answer || ' '));
   const x = document.createElement('button');
   x.type = 'button';
@@ -160,28 +170,31 @@ export function setChipEditorContent(id, explanationText, blanks = []) {
   let m;
   while ((m = re.exec(tmpl)) !== null) {
     if (m.index > last) el.appendChild(document.createTextNode(tmpl.slice(last, m.index)));
-    const answer = blankMap.get(Number(m[1]))?.answer || '';
-    el.appendChild(makeChipEl(answer));
+    const blank = blankMap.get(Number(m[1]));
+    el.appendChild(makeChipEl(blank?.answer || '', blank?.aliases));
     last = m.index + m[0].length;
   }
   if (last < tmpl.length) el.appendChild(document.createTextNode(tmpl.slice(last)));
   resetHistory(id);
 }
 
-function nodeToTemplate(node, answers) {
+function nodeToTemplate(node, picked) {
   let out = '';
   node.childNodes.forEach((child) => {
     if (child.nodeType === 3) {
       out += child.nodeValue;
     } else if (isChip(child)) {
-      answers.push(child.dataset.answer || '');
-      out += `[[BLANK${answers.length}]]`;
+      picked.push({
+        answer: child.dataset.answer || '',
+        aliases: parseAliases(child.dataset.aliases),
+      });
+      out += `[[BLANK${picked.length}]]`;
     } else if (child.nodeName === 'BR') {
       out += '\n';
     } else if (child.nodeType === 1) {
       // 브라우저가 삽입한 div/p 등 블록은 줄바꿈으로 취급
       if (out && !out.endsWith('\n') && /^(DIV|P)$/.test(child.nodeName)) out += '\n';
-      out += nodeToTemplate(child, answers);
+      out += nodeToTemplate(child, picked);
     }
   });
   return out;
@@ -191,9 +204,9 @@ function nodeToTemplate(node, answers) {
 export function readChipEditor(id) {
   const el = document.getElementById(id);
   if (!el) return { template: '', blanks: [] };
-  const answers = [];
-  const template = nodeToTemplate(el, answers);
-  const blanks = answers.map((answer, i) => ({ order: i + 1, answer }));
+  const picked = [];
+  const template = nodeToTemplate(el, picked);
+  const blanks = picked.map((p, i) => ({ order: i + 1, answer: p.answer, aliases: p.aliases }));
   return syncTemplateAndBlanks(template, blanks);
 }
 
@@ -352,6 +365,15 @@ export function chipSetAnswer(id, order, answer) {
   const chips = [...el.querySelectorAll(`.${CHIP_CLASS}`)];
   const chip = chips[Number(order) - 1];
   if (chip) setChipText(chip, answer);
+}
+
+/** order번째 칩의 동의어 갱신 — 본문 단어는 건드리지 않는다 */
+export function chipSetAliases(id, order, text) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const chips = [...el.querySelectorAll(`.${CHIP_CLASS}`)];
+  const chip = chips[Number(order) - 1];
+  if (chip) chip.dataset.aliases = formatAliases(parseAliases(text));
 }
 
 /** order번째 칩으로 스크롤·강조 */

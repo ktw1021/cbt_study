@@ -1,12 +1,6 @@
 import { getState, store } from '../core/store.js';
 import { getActiveUser } from '../domain/queries.js';
-
-function syncBlankDraftFromDOM() {
-  store.currentBlankStatuses.forEach((s) => {
-    const input = document.querySelector(`[data-blank-order="${s.order}"]`);
-    if (input) s.user = input.value;
-  });
-}
+import { syncDraftFromDOM } from '../ui/blank-input.js';
 
 /** 계정별 저장된 학습 세션 (로그아웃 후에도 유지) */
 export function getPersistedStudySession() {
@@ -39,7 +33,7 @@ export function setPersistedStudySession(sess) {
 
 /** 현재 카드의 빈칸 입력·채점 상태를 세션에 스냅샷 */
 export function snapshotCurrentCardProgress() {
-  syncBlankDraftFromDOM();
+  syncDraftFromDOM();
   const c = store.studyQueue[store.studyIndex];
   const sess = getPersistedStudySession();
   if (!c || !sess) return;
@@ -48,6 +42,7 @@ export function snapshotCurrentCardProgress() {
     sess.cardProgress[c.id] = {
       blankStatuses: store.currentBlankStatuses.map((s) => ({ ...s })),
       attemptRecorded: !!store.studyAttemptRecorded,
+      roundRecorded: !!store.studyRoundRecorded,
       focus: store.currentBlankFocus ?? null,
     };
   }
@@ -75,6 +70,7 @@ export function loadCardProgress(cardId) {
   if (!prog?.blankStatuses?.length) return false;
   store.currentBlankStatuses = prog.blankStatuses.map((s) => ({ ...s }));
   store.studyAttemptRecorded = !!prog.attemptRecorded;
+  store.studyRoundRecorded = !!prog.roundRecorded;
   store.currentBlankFocus = prog.focus ?? null;
   return true;
 }

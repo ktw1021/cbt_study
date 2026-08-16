@@ -116,7 +116,6 @@ export function migrateState(raw) {
     createSavedSnapshot: '',
     lastAutoSaveAt: '',
     lastSavedAt: '',
-    studySession: null,
     studyConfig: { scope: 'all', order: 'created', folderId: null, flag: 1 },
     createDraft: null,
     filterFlag: 'all',

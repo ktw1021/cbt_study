@@ -2,7 +2,8 @@ import { store } from '../core/store.js';
 import { persist } from '../core/storage.js';
 import { syncUrl } from '../core/hash-router.js';
 import { renderStudyMeta, renderStudySetup } from './study.js';
-import { readCreateForm } from './create.js';
+import { readCreateForm, makeCreateSnapshot } from './create.js';
+import { closeChoice } from './choice-modal.js';
 import { saveStudySession } from '../services/study-session.js';
 
 /** 카드제작 화면을 떠날 때 — 내용이 있으면 초안 보존, 없으면 비움 */
@@ -14,26 +15,6 @@ function saveCreateDraftOnLeave() {
       || (d.title && d.title !== '제목 없음');
     store.data.ui.createDraft = has ? d : null;
   } catch { /* 폼 미존재 시 무시 */ }
-}
-
-function makeCreateSnapshot(draft) {
-  const d = draft || {};
-  const outline = d.outline?.items?.length ? d.outline : null;
-  return JSON.stringify({
-    id: d.id || '',
-    folderId: d.folderId || null,
-    title: d.title || '',
-    flagColor: Number(d.flagColor) || 0,
-    displayText: d.displayText || '',
-    explanationText: d.explanationText || '',
-    memo: d.memo || '',
-    outline,
-    blanks: (d.blanks || []).map((b) => ({
-      order: Number(b.order) || 0,
-      answer: String(b.answer || ''),
-      aliases: b.aliases || [],
-    })),
-  });
 }
 
 const MOBILE_BP = 900;
@@ -107,6 +88,7 @@ export function showSection(name, { urlExtra = {}, replaceUrl = false, fromHash 
     saveCreateDraftOnLeave();
   }
   if (prevSection === 'study-play' && name !== 'study-play') saveStudySession();
+  closeChoice();
   store.currentSection = name;
   store.data.ui.section = name.startsWith('study') ? 'study' : name;
 

@@ -1,7 +1,23 @@
 import { STOPWORDS } from '../config.js';
-import { uid, normalizeTight } from '../utils/text.js';
+import { uid, normalizeTight, splitAnswers } from '../utils/text.js';
 import { writeTextarea, scrollTextareaToRange } from '../utils/dom.js';
 import { findOutlineBlankCandidates } from './outline.js';
+
+/**
+ * 이 빈칸에서 정답으로 인정되는 표현 전부.
+ * answer는 해설 본문의 단어(주 정답), aliases는 따로 등록한 동의어.
+ * 예전 카드는 answer 자체에 `||`·줄바꿈으로 동의어가 들어 있으므로 함께 쪼갠다.
+ */
+export function acceptedAnswers(blank) {
+  const list = [...splitAnswers(blank?.answer || ''), ...(blank?.aliases || [])];
+  const seen = new Set();
+  return list.filter((a) => {
+    const key = normalizeTight(a);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
 /** 원문 토큰과 blanks 배열 동기화 — 등장 순서대로 번호 재정렬 */
 export function syncTemplateAndBlanks(template, currentBlanks = []) {

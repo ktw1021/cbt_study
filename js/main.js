@@ -11,7 +11,7 @@ import { getCard } from './domain/queries.js';
 import { showAuthOverlay, renderAuthUserLists, setAuthTab, showAuthMessage } from './ui/auth.js';
 import { formatProblemHtml } from './ui/prompt.js';
 import * as actions from './app/actions.js';
-import { chipRemoveEl } from './ui/chip-editor.js';
+import { chipRemoveEl, chipSetAliases } from './ui/chip-editor.js';
 import { closeModal } from './ui/modal.js';
 import { renderPatchPage } from './ui/patch-notes.js';
 import { initCaretAutoscroll } from './ui/caret-scroll.js';
@@ -368,6 +368,11 @@ function onInput(e) {
   }
   if (e.target.id === 'explanationTemplate') { actions.onCreateInput(); return; }
   if (e.target.id === 'studyEditExplanation') { actions.onStudyEditInput(); return; }
+  if (e.target.matches('input[data-alias-for]')) {
+    // 칩에만 반영하고 슬롯은 다시 그리지 않는다 (타이핑 중 커서 유실 방지)
+    chipSetAliases(e.target.dataset.editor, Number(e.target.dataset.aliasFor), e.target.value);
+    return;
+  }
   if (e.target.matches('input.blank-field')) {
     const order = Number(e.target.dataset.blankOrder);
     actions.resetBlankGradeIfEdited(order, e.target.value);
@@ -410,7 +415,9 @@ function onKeydown(e) {
     }
   }
 
-  if (e.ctrlKey && !e.altKey && !e.shiftKey && /^[0-7]$/.test(e.key)) {
+  // 글을 쓰는 중에는 플래그 단축키가 화면 밖 카드에 찍힐 수 있어 제외
+  const isTyping = active?.matches?.('input:not([type="range"]), textarea, [contenteditable="true"]');
+  if (e.ctrlKey && !e.altKey && !e.shiftKey && /^[0-7]$/.test(e.key) && !isTyping) {
     e.preventDefault();
     actions.applyFlag(Number(e.key));
     return;

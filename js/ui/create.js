@@ -7,6 +7,7 @@ import { persist } from '../core/storage.js';
 import {
   setChipEditorContent,
   readChipEditor,
+  formatAliases,
 } from './chip-editor.js';
 
 const BLANK_EDITORS = new Set(['explanationTemplate', 'studyEditExplanation']);
@@ -137,6 +138,17 @@ export function renderCreateForm(card) {
   renderCreatePreview(card || { displayText: '', explanationText: '', blanks: [] });
 }
 
+/**
+ * 빈칸별 동의어 입력칸.
+ * 주 정답은 해설 본문의 단어라 고칠 수 없고, 다르게 써도 정답으로 칠 표현만 여기에 더한다.
+ * 값은 칩 dataset에 곧바로 반영되므로 이 칸을 다시 그리지 않아도 저장에 반영된다.
+ */
+function aliasInputHtml(b, editorId) {
+  const value = escapeHtml(formatAliases(b.aliases));
+  return `<input type="text" class="alias-input" data-alias-for="${b.order}" data-editor="${editorId}"
+    value="${value}" placeholder="동의어 (여러 개는 || 로 구분)" title="이렇게 써도 정답으로 인정합니다">`;
+}
+
 /** 카드 제작 미리보기 — 빈칸 단어는 드래그한 그대로(읽기 전용) */
 export function renderCreatePreview(data) {
   document.getElementById('promptPreview').innerHTML = formatProblemHtml(data.displayText || '');
@@ -159,6 +171,7 @@ export function renderCreatePreview(data) {
           <button type="button" class="ghost small" data-action="remove-blank-order" data-editor="explanationTemplate" data-order="${b.order}">해제</button>
         </div>
         <div class="answer-readonly">${escapeHtml(b.answer) || '<span class="empty">(단어 없음)</span>'}</div>
+        ${aliasInputHtml(b, 'explanationTemplate')}
       </div>`).join('')
     : '<div class="caption">해설에서 단어를 드래그해 빈칸을 만들면 여기에 표시됩니다.</div>';
 
@@ -186,6 +199,29 @@ export function isBlankEditor(editorId) {
   return BLANK_EDITORS.has(editorId);
 }
 
+/**
+ * 저장 시점 대비 변경 여부를 비교하기 위한 지문.
+ * 필드를 빠뜨리면 「저장 안 된 변경」 경고가 조용히 어긋나므로 이 한 곳에서만 만든다.
+ */
+export function makeCreateSnapshot(draft) {
+  const d = draft || {};
+  return JSON.stringify({
+    id: d.id || '',
+    folderId: d.folderId || null,
+    title: d.title || '',
+    flagColor: Number(d.flagColor) || 0,
+    displayText: d.displayText || '',
+    explanationText: d.explanationText || '',
+    memo: d.memo || '',
+    outline: d.outline?.items?.length ? d.outline : null,
+    blanks: (d.blanks || []).map((b) => ({
+      order: Number(b.order) || 0,
+      answer: String(b.answer || ''),
+      aliases: b.aliases || [],
+    })),
+  });
+}
+
 /** 학습 중 수정 폼 */
 export function renderStudyEditForm(card, syncedOverride = null) {
   if (!card && !syncedOverride) return;
@@ -209,6 +245,7 @@ export function renderStudyEditForm(card, syncedOverride = null) {
           <button type="button" class="ghost small" data-action="remove-blank-order" data-editor="studyEditExplanation" data-order="${b.order}">해제</button>
         </div>
         <div class="answer-readonly">${escapeHtml(b.answer) || '<span class="empty">(단어 없음)</span>'}</div>
+        ${aliasInputHtml(b, 'studyEditExplanation')}
       </div>`).join('')
     : '<div class="caption">해설에서 단어를 드래그해 빈칸을 만드세요.</div>';
 }
