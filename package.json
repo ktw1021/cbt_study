@@ -2,10 +2,6 @@
   "name": "cbt-blank-study-app",
   "private": true,
   "scripts": {
-    "dev": "npx --yes live-server . --port=3000 --watch=.,css,js,index.html --no-browser",
-    "build": "esbuild js/main.js --bundle --format=iife --outfile=js/app.bundle.js"
-  },
-  "devDependencies": {
-    "esbuild": "^0.25.0"
+    "dev": "npx --yes live-server . --host=localhost --port=3000"
   }
 }
