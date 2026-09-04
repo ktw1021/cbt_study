@@ -33,10 +33,13 @@ export function closeChoice() {
  * @param {object} opts
  * @param {string} opts.title 제목
  * @param {string} [opts.message] 보조 설명
+ * @param {string[]} [opts.items] 목록으로 보여줄 항목 (가져올 카드·중복 카드 등)
  * @param {{value: string|null, label: string, tone?: string}[]} opts.choices 첫 항목이 기본 선택
  * @returns {Promise<string|null>} 선택한 value (취소 시 null)
  */
-export function openChoice({ title, message = '', choices }) {
+export function openChoice({
+  title, message = '', items = [], choices,
+}) {
   closeChoice();
 
   const root = ensureRoot();
@@ -45,10 +48,15 @@ export function openChoice({ title, message = '', choices }) {
     return `<button type="button" class="${tone}" data-choice-index="${i}">${escapeHtml(c.label)}</button>`;
   }).join('');
 
+  const list = items.length
+    ? `<ul class="choice-items">${items.map((t) => `<li>${escapeHtml(t)}</li>`).join('')}</ul>`
+    : '';
+
   root.innerHTML = `<div class="modal-backdrop choice-backdrop">
     <div class="modal choice-modal" role="dialog" aria-modal="true">
       <h3>${escapeHtml(title)}</h3>
       ${message ? `<div class="caption choice-message">${escapeHtml(message)}</div>` : ''}
+      ${list}
       <div class="toolbar choice-actions">${buttons}</div>
     </div>
   </div>`;
