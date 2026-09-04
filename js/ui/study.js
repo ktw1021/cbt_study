@@ -7,22 +7,22 @@ import { loadCardProgress, getPersistedStudySession } from '../services/study-se
 import { renderResumePanel } from './resume-panel.js';
 import { formatProblemHtml, formatStudyExplanationHtml } from './prompt.js';
 import { renderStudyEditForm } from './create.js';
-import { getBlankInputValue, syncDraftFromDOM } from './blank-input.js';
+import { getBlankInputValue, syncDraftFromDOM, focusBlankField } from './blank-input.js';
 
 export { getBlankInputValue, syncDraftFromDOM };
 
-const SCOPE_LABEL = { all: '전체 카드', folder: '폴더', selected: '선택 카드', wrong: '최근 오답', flag: '플래그' };
+const SCOPE_LABEL = { all: '전체 카드', folder: '폴더들', wrong: '최근 오답', flag: '플래그' };
 const ORDER_LABEL = { created: '만든 순서', 'low-rounds': '회독 낮은 순', random: '랜덤' };
 const FLAG_NAME = ['없음', '빨강', '주황', '노랑', '초록', '청록', '파랑', '보라'];
 
-/** 범위별 보조 선택 UI (폴더=모달 버튼 / 플래그=색 스와치 / 선택카드=모달 버튼) */
+/** 범위별 보조 선택 UI (폴더=모달 버튼 / 플래그=색 스와치) */
 function scopeDetailHtml(cfg) {
   if (cfg.scope === 'folder') {
-    const name = cfg.folderId ? getFolder(cfg.folderId)?.name : null;
-    return `<button type="button" class="ghost small" data-action="pick-study-folder">📁 ${name ? `폴더: ${escapeHtml(name)}` : '폴더 선택'}</button>`;
-  }
-  if (cfg.scope === 'selected') {
-    return `<button type="button" class="ghost small" data-action="pick-study-cards">🗂 학습할 카드 고르기</button>`;
+    const names = (cfg.folderIds || []).map((id) => getFolder(id)?.name).filter(Boolean);
+    let label = '폴더 선택';
+    if (names.length === 1) label = `폴더: ${names[0]}`;
+    else if (names.length > 1) label = `폴더 ${names.length}개`;
+    return `<button type="button" class="ghost small" data-action="pick-study-folder">📁 ${escapeHtml(label)}</button>`;
   }
   if (cfg.scope === 'flag') {
     const swatches = [1, 2, 3, 4, 5, 6, 7].map((n) =>
@@ -33,9 +33,29 @@ function scopeDetailHtml(cfg) {
 }
 
 function scopeText(cfg) {
-  if (cfg.scope === 'folder') return `폴더 '${escapeHtml(getFolder(cfg.folderId)?.name || '')}'`;
+  if (cfg.scope === 'folder') {
+    const names = (cfg.folderIds || []).map((id) => getFolder(id)?.name).filter(Boolean);
+    if (!names.length) return '폴더';
+    if (names.length === 1) return `폴더 '${escapeHtml(names[0])}'`;
+    return `폴더 ${names.length}개 (${names.map(escapeHtml).join(', ')})`;
+  }
   if (cfg.scope === 'flag') return `${FLAG_NAME[cfg.flag] || ''} 플래그`;
-  return SCOPE_LABEL[cfg.scope];
+  return SCOPE_LABEL[cfg.scope] || SCOPE_LABEL.all;
+}
+
+function normalizeStudyCfg(raw) {
+  const cfg = { scope: 'all', order: 'created', folderIds: [], flag: 1, ...(raw || {}) };
+  if (cfg.scope === 'selected') cfg.scope = 'all';
+  if (!Array.isArray(cfg.folderIds)) cfg.folderIds = [];
+  if (cfg.folderId && !cfg.folderIds.length) cfg.folderIds = [cfg.folderId];
+  delete cfg.folderId;
+  return cfg;
+}
+
+/** 미리보기 체크 집합 — null이면 목록 전부 선택 */
+export function getStudySetupCheckedSet(poolIds) {
+  if (store.studySetupCheckedIds == null) return new Set(poolIds);
+  return new Set(store.studySetupCheckedIds);
 }
 
 /** 학습 세트 구성 화면 — 범위·순서 + 범위별 보조선택 + 실시간 요약/장수 + 이어서 학습 */
@@ -49,50 +69,74 @@ export function renderStudySetup() {
   const startBtn = document.getElementById('startStudyBtn');
 
   const state = getState();
-  const cfg = { scope: 'all', order: 'created', folderId: null, flag: 1, ...(state?.ui?.studyConfig || {}) };
+  const cfg = normalizeStudyCfg(state?.ui?.studyConfig);
 
   scopeEl.value = cfg.scope;
   orderEl.value = cfg.order;
   detail.innerHTML = scopeDetailHtml(cfg);
 
   const cards = buildStudyQueue({
-    scope: cfg.scope, order: cfg.order, folderId: cfg.folderId, flag: cfg.flag,
-    selectedIds: state?.selectedIds || [],
+    scope: cfg.scope, order: cfg.order, folderIds: cfg.folderIds, flag: cfg.flag,
   });
-  const count = cards.length;
+  const poolIds = cards.map((c) => c.id);
+  const poolKey = `${cfg.scope}|${(cfg.folderIds || []).join(',')}|${cfg.flag || ''}`;
+  if (store.studySetupPoolKey !== poolKey) {
+    store.studySetupPoolKey = poolKey;
+    store.studySetupCheckedIds = null; // 범위가 바뀌면 다시 전부 체크
+  }
+  const checked = getStudySetupCheckedSet(poolIds);
+  const checkedCards = cards.filter((c) => checked.has(c.id));
+  const checkedCount = checkedCards.length;
+  const poolCount = cards.length;
 
   let needPick = '';
-  if (cfg.scope === 'folder' && !cfg.folderId) needPick = '학습할 폴더를 선택하세요.';
+  if (cfg.scope === 'folder' && !(cfg.folderIds || []).length) needPick = '학습할 폴더를 선택하세요.';
   else if (cfg.scope === 'flag' && !cfg.flag) needPick = '플래그 색을 선택하세요.';
-  else if (cfg.scope === 'selected' && count === 0) needPick = '「학습할 카드 고르기」로 카드를 선택하세요.';
 
   if (needPick) {
     summary.textContent = needPick;
     summary.classList.add('warn');
   } else {
-    summary.innerHTML = count
-      ? `<strong>${scopeText(cfg)}</strong> · ${count}장 · 순서: ${ORDER_LABEL[cfg.order]}`
+    summary.innerHTML = poolCount
+      ? `<strong>${scopeText(cfg)}</strong> · ${checkedCount}/${poolCount}장 · 순서: ${ORDER_LABEL[cfg.order]}`
       : `<strong>${scopeText(cfg)}</strong> · 해당하는 카드가 없습니다.`;
-    summary.classList.toggle('warn', count === 0);
+    summary.classList.toggle('warn', checkedCount === 0);
   }
   if (startBtn) {
-    startBtn.disabled = count === 0;
-    startBtn.textContent = count ? `새로 시작 (${count}장)` : '새로 시작';
+    startBtn.disabled = checkedCount === 0;
+    startBtn.textContent = checkedCount ? `새로 시작 (${checkedCount}장)` : '새로 시작';
   }
 
   const preview = document.getElementById('studyPreviewList');
   if (preview) {
-    if (needPick || !count) {
+    const listEl = preview.querySelector('.study-preview-list');
+    const savedScroll = listEl?.scrollTop ?? 0;
+    if (needPick || !poolCount) {
       preview.innerHTML = '';
     } else {
       preview.innerHTML = `
-        <div class="study-preview-head caption">포함된 카드 ${count}장</div>
+        <div class="study-preview-head caption">
+          <span data-study-preview-count>포함된 카드 ${checkedCount}/${poolCount}장</span>
+          <span class="study-preview-head-actions">
+            <button type="button" class="ghost small" data-action="study-setup-select-all">전체 선택</button>
+            <button type="button" class="ghost small" data-action="study-setup-deselect-all">전체 해제</button>
+          </span>
+        </div>
         <div class="study-preview-list">${cards.map((c) => `
           <div class="study-preview-item">
-            <span class="flag flag-${c.flagColor}"></span>
-            <span class="study-preview-title">${escapeHtml(shorten(c.title || c.displayText, 40))}</span>
-            <span class="study-preview-meta">${escapeHtml(folderPathNames(c.folderId))} · 빈칸 ${c.blanks.length}</span>
+            <label class="study-preview-main">
+              <input type="checkbox" data-action="toggle-study-setup-card" data-id="${c.id}" ${checked.has(c.id) ? 'checked' : ''} />
+              <span class="flag flag-${c.flagColor}"></span>
+              <span class="study-preview-title">${escapeHtml(shorten(c.title || c.displayText, 40))}</span>
+              <span class="study-preview-meta">${escapeHtml(folderPathNames(c.folderId))} · 빈칸 ${c.blanks.length}</span>
+            </label>
+            <span class="study-preview-actions">
+              <button type="button" class="primary small" data-action="edit-card" data-id="${c.id}">수정</button>
+              <button type="button" class="pink small" data-action="study-one" data-id="${c.id}">학습</button>
+            </span>
           </div>`).join('')}</div>`;
+      const nextList = preview.querySelector('.study-preview-list');
+      if (nextList) nextList.scrollTop = savedScroll;
     }
   }
 
@@ -100,6 +144,44 @@ export function renderStudySetup() {
     mountId: 'studyResumeMount',
     variant: 'study',
     sess: getPersistedStudySession(),
+  });
+}
+
+/** 체크만 바꿀 때 — 목록 HTML을 안 갈아엎어 스크롤 유지 */
+export function refreshStudySetupChecksOnly() {
+  const state = getState();
+  const cfg = normalizeStudyCfg(state?.ui?.studyConfig);
+  const cards = buildStudyQueue({
+    scope: cfg.scope, order: cfg.order, folderIds: cfg.folderIds, flag: cfg.flag,
+  });
+  const checked = getStudySetupCheckedSet(cards.map((c) => c.id));
+  const checkedCount = cards.filter((c) => checked.has(c.id)).length;
+  const poolCount = cards.length;
+
+  let needPick = '';
+  if (cfg.scope === 'folder' && !(cfg.folderIds || []).length) needPick = '학습할 폴더를 선택하세요.';
+  else if (cfg.scope === 'flag' && !cfg.flag) needPick = '플래그 색을 선택하세요.';
+
+  const summary = document.getElementById('studySummary');
+  const startBtn = document.getElementById('startStudyBtn');
+  if (needPick) {
+    summary.textContent = needPick;
+    summary.classList.add('warn');
+  } else {
+    summary.innerHTML = poolCount
+      ? `<strong>${scopeText(cfg)}</strong> · ${checkedCount}/${poolCount}장 · 순서: ${ORDER_LABEL[cfg.order]}`
+      : `<strong>${scopeText(cfg)}</strong> · 해당하는 카드가 없습니다.`;
+    summary.classList.toggle('warn', checkedCount === 0);
+  }
+  if (startBtn) {
+    startBtn.disabled = checkedCount === 0;
+    startBtn.textContent = checkedCount ? `새로 시작 (${checkedCount}장)` : '새로 시작';
+  }
+  const countEl = document.querySelector('[data-study-preview-count]');
+  if (countEl && !needPick) countEl.textContent = `포함된 카드 ${checkedCount}/${poolCount}장`;
+
+  document.querySelectorAll('#studyPreviewList input[data-action="toggle-study-setup-card"]').forEach((el) => {
+    el.checked = checked.has(el.dataset.id);
   });
 }
 
@@ -190,8 +272,8 @@ export function renderStudyCard() {
   const checked = store.currentBlankStatuses.filter((s) => s.checked).length;
   const ok = store.currentBlankStatuses.filter((s) => s.correct).length;
   document.getElementById('gradeResult').textContent = checked
-    ? `채점 ${ok}/${c.blanks.length} · Enter로 빈칸별 채점`
-    : '해설에서 빈칸 입력 → Enter로 채점';
+    ? `채점 ${ok}/${c.blanks.length} · Enter 또는 다른 칸으로 이동 시 채점`
+    : '해설에서 빈칸 입력 → Enter 또는 다음 칸으로 이동 시 채점';
   renderStudyEditForm(c);
 }
 
@@ -203,7 +285,6 @@ export function paintInlineBlanks(statuses) {
     input.classList.toggle('ok', s.correct);
     input.classList.toggle('bad', s.checked && !s.correct);
     input.classList.toggle('focus', store.currentBlankFocus === s.order);
-    input.readOnly = false;
   });
 }
 
@@ -218,11 +299,7 @@ export function refreshStudyViews({ focusOrder } = {}) {
 }
 
 function focusBlankInput(order) {
-  const input = document.querySelector(`[data-blank-order="${order}"]`);
-  if (!input) return;
-  input.focus();
-  const len = input.value.length;
-  input.setSelectionRange(len, len);
+  focusBlankField(document.querySelector(`[data-blank-order="${order}"]`));
 }
 
 /** 빈칸 이동 — 입력 보존을 위해 패널을 재생성하지 않고 포커스·하이라이트만 갱신 */
@@ -231,7 +308,7 @@ export function focusBlankUI(order) {
   store.currentBlankFocus = order;
   const input = document.querySelector(`[data-blank-order="${order}"]`);
   if (input) {
-    input.focus();
+    focusBlankField(input);
     input.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
   paintInlineBlanks(store.currentBlankStatuses);
@@ -267,6 +344,10 @@ let peekGaugeRaf = null;
 let peekTargetInput = null;
 let peekStartTime = 0;
 let peekDelayMs = PEEK_DELAY_MS;
+let peekPointer = { x: 0, y: 0 };
+/** 타이핑으로 ○○○가 줄어들 때 가짜 mouseout 무시 */
+let peekStickyWrap = null;
+let peekStickyUntil = 0;
 
 /** 인정되는 답(주 정답 + 동의어)을 모두 표시 */
 function peekAnswerText(order) {
@@ -298,11 +379,31 @@ function ensurePeekGaugeEl() {
   return peekGaugeEl;
 }
 
+function blankPeekAnchorEl(el) {
+  return el?.closest?.('.blank-wrap') || el;
+}
+
+/** 여러 줄 빈칸이라도 '첫 줄' 박스 기준 — 전체 높이 중심 금지 */
+function blankPeekTopRect(el) {
+  const anchor = blankPeekAnchorEl(el);
+  if (!anchor) return null;
+  try {
+    const range = document.createRange();
+    range.selectNodeContents(anchor);
+    const rects = range.getClientRects();
+    if (rects?.length) return rects[0];
+  } catch {
+    /* ignore */
+  }
+  return anchor.getBoundingClientRect();
+}
+
 function positionPeekGauge(input) {
   const gauge = ensurePeekGaugeEl();
-  const r = input.getBoundingClientRect();
+  const r = blankPeekTopRect(input);
+  if (!r) return gauge;
   gauge.style.left = `${r.right + window.scrollX + 4}px`;
-  gauge.style.top = `${r.top + window.scrollY + (r.height - 20) / 2}px`;
+  gauge.style.top = `${r.top + window.scrollY + Math.max(0, (r.height - 20) / 2)}px`;
   return gauge;
 }
 
@@ -313,11 +414,11 @@ function setPeekGaugeProgress(progress) {
   );
 }
 
-function hidePeekGauge() {
+function hidePeekGauge({ clearTarget = true } = {}) {
   if (peekGaugeRaf) cancelAnimationFrame(peekGaugeRaf);
   peekGaugeRaf = null;
   peekStartTime = 0;
-  peekTargetInput = null;
+  if (clearTarget) peekTargetInput = null;
   if (peekGaugeEl) {
     peekGaugeEl.classList.remove('show', 'ready');
     setPeekGaugeProgress(0);
@@ -326,17 +427,39 @@ function hidePeekGauge() {
 
 function hidePeek() {
   hidePeekGauge();
+  peekStickyWrap = null;
+  peekStickyUntil = 0;
   if (peekEl) peekEl.classList.remove('show');
 }
 
 function showPeekAnswer(input, answer) {
-  hidePeekGauge();
+  // 게이지만 내리고 타깃은 유지 — 힌트 표시 중 peekTargetInput=null이면 타이핑 시 재시작 flicker
+  hidePeekGauge({ clearTarget: false });
+  peekTargetInput = input;
   const el = ensurePeekEl();
   el.textContent = answer;
-  const r = input.getBoundingClientRect();
-  el.style.left = `${r.left + window.scrollX}px`;
-  el.style.top = `${r.top + window.scrollY - 34}px`;
+  const anchor = blankPeekAnchorEl(input);
+  const r = blankPeekTopRect(input);
+  if (!r) return;
+  const panel = anchor?.closest?.('.study-explanation-scroll')
+    || anchor?.closest?.('.explanation-body')
+    || anchor?.closest?.('.study-panel-body');
+  const panelR = panel?.getBoundingClientRect();
+  const left = r.left + window.scrollX;
+  const maxRight = (panelR ? panelR.right : window.innerWidth - 12) + window.scrollX;
+  el.style.maxWidth = `${Math.max(120, maxRight - left - 8)}px`;
+  el.style.left = `${left}px`;
   el.classList.add('show');
+  // 힌트 '아래쪽'이 빈칸 첫 줄 바로 위에 오도록 (아래로 커져서 가리지 않음)
+  requestAnimationFrame(() => {
+    const pr = el.getBoundingClientRect();
+    let top = r.top + window.scrollY - pr.height - 6;
+    if (top < window.scrollY + 4) {
+      // 위 공간 부족 시에만 첫 줄 아래(빈칸을 덮지 않게 첫 줄 높이만큼 띄움)
+      top = r.bottom + window.scrollY + 6;
+    }
+    el.style.top = `${top}px`;
+  });
 }
 
 function tickPeekGauge() {
@@ -359,25 +482,84 @@ function tickPeekGauge() {
 
 /** 빈칸 위 호버(게이지) → 정답 표시, 마우스를 떼면 숨김 */
 export function handleBlankPeekOver(e) {
-  const input = e.target.closest?.('.blank-field');
+  const wrap = e.target.closest?.('.blank-wrap');
+  const input = wrap?.querySelector?.('.blank-field') || e.target.closest?.('.blank-field');
   if (!input) return;
   const order = Number(input.dataset.blankOrder);
   if (!peekAnswerText(order)) return;
 
-  if (peekTargetInput === input && peekGaugeRaf) return;
+  peekPointer = { x: e.clientX, y: e.clientY };
+
+  // 같은 칸에서 게이지·엿보기가 이미 진행 중이면 재시작하지 않음 (타이핑 리플로우 flicker 방지)
+  if (peekTargetInput === input) {
+    if (peekGaugeRaf || peekEl?.classList.contains('show')) return;
+  }
 
   hidePeek();
   peekTargetInput = input;
   peekDelayMs = peekDelayFor(order);
   peekStartTime = Date.now();
-  positionPeekGauge(input);
+  positionPeekGauge(wrap || input);
   setPeekGaugeProgress(0);
   peekGaugeRaf = requestAnimationFrame(tickPeekGauge);
 }
 
+export function handleBlankPeekMove(e) {
+  if (!e.target.closest?.('.blank-wrap')) return;
+  peekPointer = { x: e.clientX, y: e.clientY };
+}
+
 export function handleBlankPeekOut(e) {
-  if (!e.target.closest?.('.blank-field')) return;
+  if (!e.target.closest?.('.blank-wrap') && !e.target.closest?.('.blank-field')) return;
+  const fromWrap = e.target.closest?.('.blank-wrap');
+  const to = e.relatedTarget;
+  if (to?.closest?.('.blank-wrap') === fromWrap) return;
+  // 타이핑으로 ○ 마스크가 줄어든 직후 가짜 leave
+  if (fromWrap && fromWrap === peekStickyWrap && Date.now() < peekStickyUntil) return;
   hidePeek();
+}
+
+/** 마스크 DOM 바꾸기 직전에 호출 — 가짜 mouseout이 hidePeek를 못 타게 */
+export function armBlankPeekSticky(field) {
+  const wrap = field?.closest?.('.blank-wrap');
+  if (!wrap) return;
+  const active = peekTargetInput === field
+    || peekStickyWrap === wrap
+    || peekEl?.classList.contains('show')
+    || !!peekGaugeRaf;
+  if (!active) return;
+  peekStickyWrap = wrap;
+  peekStickyUntil = Date.now() + 400;
+}
+
+/**
+ * ○○○ 마스크가 줄어든 뒤에도 마우스가 같은 빈칸 위에 있으면
+ * 힌트를 딜레이 없이 유지·재표시 (사라졌다 다시 뜨는 깜빡임 방지)
+ */
+export function retainBlankPeekAfterEdit(field) {
+  if (!field?.matches?.('.blank-field')) return;
+  const wrap = field.closest('.blank-wrap');
+  if (!wrap) return;
+  const wasPeeking = peekTargetInput === field
+    || peekStickyWrap === wrap
+    || peekEl?.classList.contains('show');
+  if (!wasPeeking) return;
+
+  peekStickyWrap = wrap;
+  peekStickyUntil = Date.now() + 400;
+
+  requestAnimationFrame(() => {
+    const under = document.elementFromPoint(peekPointer.x, peekPointer.y);
+    if (under?.closest?.('.blank-wrap') !== wrap) return;
+    const order = Number(field.dataset.blankOrder);
+    const answer = peekAnswerText(order);
+    if (!answer) return;
+    if (peekGaugeRaf && peekTargetInput === field) {
+      positionPeekGauge(field);
+      return;
+    }
+    showPeekAnswer(field, answer);
+  });
 }
 
 /**

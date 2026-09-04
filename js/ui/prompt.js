@@ -11,32 +11,29 @@ export function formatProblemHtml(text) {
 function blankInputHtml(order, card, st = {}) {
   const blank = (card?.blanks || []).find((b) => b.order === order);
   const answer = splitAnswers(blank?.answer)[0] || '';
-  const userVal = st.user ?? '';
+  const userVal = String(st.user ?? '');
   const checked = st.checked;
   const correct = st.correct;
   const score = Number(st.score ?? 0);
 
-  let cls = 'blank-field';
+  let cls = 'blank-field blank-field-shape';
   if (checked) cls += correct ? ' ok' : ' bad';
   if (store.currentBlankFocus === order) cls += ' focus';
 
   const hint = blankShapeHint(answer);
-  const len = Math.max(hint.length, String(userVal).length, 1);
-  const w = `width:${len}em`;
+  const rest = hint.slice(userVal.length);
 
   // 채점됐고 (오답 || 100% 일치가 아닌 정답)이면 놓친 부분 학습을 위해 정답 노출.
-  // 입력칸은 항상 편집 가능 — 맞아도 수정·삭제 가능.
   const reveal = checked && (!correct || score < 100);
   const wrapCls = reveal ? 'blank-wrap revealing' : 'blank-wrap';
   const answerCls = correct ? 'blank-answer partial' : 'blank-answer wrong';
   const answerHtml = reveal
-    ? `<span class="${answerCls}">정답 ${escapeHtml(answer)}</span>`
+    ? `<span class="${answerCls}">정답: ${escapeHtml(answer)}</span>`
     : '';
 
-  return `<span class="${wrapCls}" id="blankWrap${order}">
-    <input type="text" class="${cls} blank-field-shape" data-blank-order="${order}" data-action="blank-input"
-      value="${escapeHtml(userVal)}" placeholder="${escapeHtml(hint)}" style="${w}" autocomplete="off" />${answerHtml}
-  </span>`;
+  // 인라인 contenteditable + 남은 ○○○ 마스크 → 줄바꿈 + 칸 크기 유지
+  const body = userVal ? escapeHtml(userVal) : '';
+  return `<span class="${wrapCls}" id="blankWrap${order}" data-blank-wrap="${order}"><span class="${cls}" contenteditable="true" role="textbox" aria-label="빈칸 ${order}" data-blank-order="${order}" data-action="blank-input" data-hint="${escapeHtml(hint)}" spellcheck="false">${body}</span><span class="blank-rest" contenteditable="false" aria-hidden="true">${escapeHtml(rest)}</span>${answerHtml}</span>`;
 }
 
 /** 해설 패널 — 본문 흐름 속 인라인 빈칸 입력 */

@@ -18,7 +18,7 @@ export function createDefaultState() {
       createSavedSnapshot: '',
       lastAutoSaveAt: '',
       lastSavedAt: '',
-      studyConfig: { scope: 'all', order: 'created', folderId: null, flag: 1 },
+      studyConfig: { scope: 'all', order: 'created', folderIds: [], flag: 1 },
       createDraft: null,
       filterFlag: 'all',
       filterFolderId: null,
@@ -76,6 +76,8 @@ export function migrateCard(raw) {
   return {
     id: raw.id || uid('c'),
     userId: raw.userId || '',
+    // 최초 제작자 이름. 공유로 남의 카드를 받아도 바뀌지 않는다(소유자 userId와 별개)
+    author: String(raw.author || '').trim(),
     folderId: raw.folderId || null,
     title: raw.title || shorten(stripBlankMarkers(explanationText || displayText), 40) || '제목 없음',
     originalText: stripBlankMarkers(raw.originalText || displayText),
@@ -116,7 +118,7 @@ export function migrateState(raw) {
     createSavedSnapshot: '',
     lastAutoSaveAt: '',
     lastSavedAt: '',
-    studyConfig: { scope: 'all', order: 'created', folderId: null, flag: 1 },
+    studyConfig: { scope: 'all', order: 'created', folderIds: [], flag: 1 },
     createDraft: null,
     filterFlag: 'all',
     filterFolderId: null,
@@ -124,7 +126,14 @@ export function migrateState(raw) {
     studySession: null,
     ...(raw.ui || {}),
   };
-  merged.ui.studyConfig = { scope: 'all', order: 'created', folderId: null, flag: 1, ...(merged.ui.studyConfig || {}) };
+  merged.ui.studyConfig = { scope: 'all', order: 'created', folderIds: [], flag: 1, ...(merged.ui.studyConfig || {}) };
+  if (merged.ui.studyConfig.scope === 'selected') merged.ui.studyConfig.scope = 'all';
+  // 예전 단일 folderId → folderIds[]
+  if (!Array.isArray(merged.ui.studyConfig.folderIds)) merged.ui.studyConfig.folderIds = [];
+  if (merged.ui.studyConfig.folderId && !merged.ui.studyConfig.folderIds.length) {
+    merged.ui.studyConfig.folderIds = [merged.ui.studyConfig.folderId];
+  }
+  delete merged.ui.studyConfig.folderId;
   if (merged.ui.filterFlag == null) merged.ui.filterFlag = 'all';
   if (merged.ui.filterFolderId === undefined) merged.ui.filterFolderId = null;
   if (!merged.ui.studySessions) merged.ui.studySessions = {};

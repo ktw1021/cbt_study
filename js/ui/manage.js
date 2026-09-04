@@ -38,6 +38,15 @@ export function renderFolderBreadcrumb() {
       return `<span class="crumb-sep">▸</span><button class="crumb${last ? ' active' : ''}" data-action="select-folder" data-id="${f.id}">${escapeHtml(f.name)}</button>`;
     }),
   ];
+
+  const folderId = store.activeFolderId;
+  const canStudy = !!(folderId && user && countCardsInFolder(folderId, user.id) > 0);
+  crumbs.push(
+    `<button type="button" class="small pink folder-study-btn${canStudy ? '' : ' is-disabled'}"`
+    + ` data-action="study-manage-folder"${canStudy ? '' : ' disabled aria-disabled="true"'}`
+    + ` title="${canStudy ? '이 폴더로 학습 시작' : '카드가 있는 폴더를 선택하세요'}">학습</button>`,
+  );
+
   el.innerHTML = crumbs.join('');
 }
 
@@ -130,7 +139,7 @@ export function renderManageDetail(id) {
     <div class="detail-body">
       <div class="col">
         <div><strong>${escapeHtml(c.title)}</strong> <span class="flag flag-${c.flagColor}"></span></div>
-        <div class="caption">${escapeHtml(folderPathNames(c.folderId))} · 회독 ${c.rounds} · 오답 ${c.wrongCount}</div>
+        <div class="caption">${escapeHtml(folderPathNames(c.folderId))} · 회독 ${c.rounds} · 오답 ${c.wrongCount}${c.author ? ` · 제작 ${escapeHtml(c.author)}` : ''}</div>
         <div><strong>문제</strong><br>${formatProblemHtml(c.displayText)}</div>
         <div><strong>해설</strong><br>${formatPromptHtml(c.explanationText || '', c.blanks || [])}</div>
         <div><strong>정답</strong><br>${c.blanks.map((b) => `빈칸${b.order}: ${escapeHtml(b.answer)}`).join('<br>') || '없음'}</div>

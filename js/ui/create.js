@@ -136,6 +136,15 @@ export function renderCreateForm(card) {
   document.getElementById('cardMemo').value = card?.memo || '';
   writeOutlineToForm(card?.outline || null);
   renderCreatePreview(card || { displayText: '', explanationText: '', blanks: [] });
+  syncCreateDeleteButton(!!card?.id);
+}
+
+/** 저장된 카드만 삭제 가능 */
+export function syncCreateDeleteButton(canDelete) {
+  const btn = document.querySelector('[data-action="delete-card-form"]');
+  if (!btn) return;
+  btn.disabled = !canDelete;
+  btn.title = canDelete ? '이 카드를 삭제합니다' : '저장된 카드만 삭제할 수 있습니다';
 }
 
 /**

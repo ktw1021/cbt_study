@@ -4,6 +4,8 @@ export const store = {
   authenticatedUserId: null,
   authTab: 'login',
   pendingPinSetupUserId: null,
+  pinSetupQueue: [],
+  pinSetupResumeUserId: null,
   currentSection: 'manage',
   studyQueue: [],
   studyIndex: 0,
@@ -16,6 +18,8 @@ export const store = {
   activeManageId: null,
   activeFolderId: null,
   autoBlankEditorId: 'explanationTemplate',
+  studySetupCheckedIds: null,
+  studySetupPoolKey: null,
 };
 
 export function getState() {

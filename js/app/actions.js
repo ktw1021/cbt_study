@@ -1,7 +1,7 @@
 /**
  * 사용자 액션 핸들러 — UI 이벤트와 도메인 로직 연결
  */
-import { getState, store, setState } from '../core/store.js';
+import { getState, store } from '../core/store.js';
 import { persist, saveState } from '../core/storage.js';
 import { uid, shuffle, stripBlankMarkers } from '../utils/text.js';
 import { migrateCard } from '../domain/migrate.js';
@@ -15,15 +15,25 @@ import {
   countCardsInFolder,
   getCardsFiltered,
   buildStudyQueue,
-  findUserByName,
+  findUsersByName,
+  isUserNameTaken,
   normalizeUserName,
+  pruneEmptyStudyFolders,
 } from '../domain/queries.js';
 import { findAutoCandidates, acceptedAnswers } from '../domain/blank.js';
 import { findOutlineBlankCandidates, listOutlineTokens, normalizeOutline } from '../domain/outline.js';
 import { normalizeTight } from '../utils/text.js';
 import { pushUndo, undo, hasUndo } from '../services/undo.js';
 import { checkAnswer } from '../services/grading.js';
-import { exportData, importFromFile } from '../services/import-export.js';
+import {
+  exportData,
+  readImportFile,
+  describeImport,
+  previewFolderImport,
+  previewUsersImport,
+  applyUsersImport,
+  applyFolderImport,
+} from '../services/import-export.js';
 import { saveStudySession, snapshotCurrentCardProgress, getPersistedStudySession, setPersistedStudySession } from '../services/study-session.js';
 import { showSection } from '../ui/router.js';
 import {
@@ -40,6 +50,7 @@ import {
   syncCardFlagPicker,
   writeOutlineToForm,
   readOutlineFromForm,
+  syncCreateDeleteButton,
 } from '../ui/create.js';
 import {
   chipMakeBlank,
@@ -59,9 +70,13 @@ import {
   getBlankInputValue,
   renderStudyCard,
   renderStudySetup,
+  refreshStudySetupChecksOnly,
   syncDraftFromDOM,
   handleBlankPeekOver,
   handleBlankPeekOut,
+  handleBlankPeekMove,
+  armBlankPeekSticky,
+  retainBlankPeekAfterEdit,
   resetBlankGradeIfEdited,
   getGradingThreshold,
   showRoundToast,
@@ -88,27 +103,31 @@ async function completeLogin(userId) {
   const user = state.users.find((u) => u.id === userId);
   if (!user) return false;
 
+  const sameUser = store.authenticatedUserId === userId;
   store.authenticatedUserId = userId;
   state.activeUserId = userId;
-  store.activeFolderId = null;
-  store.activeManageId = null;
 
-  // 사용자 전환 시 작성 초안·런타임 학습 상태만 정리 (studySessions는 계정별로 유지)
-  state.ui.createDraft = null;
-  state.ui.filterFolderId = null;
-  state.ui.filterFlag = 'all';
-  store.studyQueue = [];
-  store.studyIndex = 0;
-  store._studyCardId = null;
-  store.currentBlankStatuses = [];
+  if (!sameUser) {
+    store.activeFolderId = null;
+    store.activeManageId = null;
+    state.ui.createDraft = null;
+    state.ui.filterFolderId = null;
+    state.ui.filterFlag = 'all';
+    store.studyQueue = [];
+    store.studyIndex = 0;
+    store._studyCardId = null;
+    store.currentBlankStatuses = [];
+  }
 
   clearAuthInputs();
   showAuthMessage('');
   await saveState();
 
   hideAuthOverlay();
-  renderCreateForm(null);
-  renderManageDetail(null);
+  if (!sameUser) {
+    renderCreateForm(null);
+    renderManageDetail(null);
+  }
   renderAll();
   return true;
 }
@@ -125,9 +144,10 @@ export function restoreSession() {
     return false;
   }
 
+  // PIN 미설정 계정이 active면 설정 화면만. 로그인 탭으로 덮지 않는다.
   if (userNeedsPinSetup(user)) {
     showPinSetup(user.id, user.name);
-    return false;
+    return true;
   }
 
   store.authenticatedUserId = userId;
@@ -141,10 +161,9 @@ export async function loginUser() {
   try {
     const { name, pin } = readLoginForm();
     if (!name) return showAuthMessage('맨 위 「이름」 칸에 가입할 때 쓴 이름을 입력하세요.', 'error');
-    if (!validatePin(pin)) return showAuthMessage('4자리 숫자 비밀번호를 입력하세요.', 'error');
 
-    const user = findUserByName(name);
-    if (!user) {
+    const matches = findUsersByName(name);
+    if (!matches.length) {
       const saved = getState().users.map((u) => u.name).join(', ');
       return showAuthMessage(
         saved
@@ -154,13 +173,17 @@ export async function loginUser() {
       );
     }
 
-    if (userNeedsPinSetup(user)) {
-      showPinSetup(user.id, user.name);
+    // 비밀번호 없는 계정만 있으면 바로 설정
+    const pinReady = matches.filter((u) => !userNeedsPinSetup(u));
+    if (!pinReady.length) {
+      showPinSetup(matches[0].id, matches[0].name);
       return;
     }
 
-    const ok = verifyPin(pin, user);
-    if (!ok) return showAuthMessage('비밀번호가 일치하지 않습니다. 다시 입력해 주세요.', 'error');
+    if (!validatePin(pin)) return showAuthMessage('4자리 숫자 비밀번호를 입력하세요.', 'error');
+
+    const user = pinReady.find((u) => verifyPin(pin, u));
+    if (!user) return showAuthMessage('비밀번호가 일치하지 않습니다. 다시 입력해 주세요.', 'error');
 
     await completeLogin(user.id);
   } catch (err) {
@@ -178,8 +201,9 @@ export async function registerUser() {
     const { name, pin, pinConfirm } = readRegisterForm();
     if (!name) return showAuthMessage('맨 위 「이름」 칸에 이름을 입력하세요.', 'error');
     if (name.length < 2) return showAuthMessage('이름은 2자 이상 입력하세요.', 'error');
-    if (findUserByName(name)) {
-      return showAuthMessage(`"${name}" 계정이 이미 있습니다. 로그인 탭에서 같은 이름·비밀번호로 들어가세요.`, 'error');
+    const taken = normalizeUserName(name);
+    if (isUserNameTaken(taken)) {
+      return showAuthMessage(`「${taken}」은 이미 있는 이름입니다. 다른 이름을 입력하세요.`, 'error');
     }
     if (!validatePin(pin)) return showAuthMessage('비밀번호는 4자리 숫자(0000~9999)여야 합니다.', 'error');
     if (pin !== pinConfirm) return showAuthMessage('비밀번호 확인이 일치하지 않습니다.', 'error');
@@ -220,7 +244,27 @@ export async function setupUserPin() {
     user.pin = pin;
     store.pendingPinSetupUserId = null;
     await saveState();
-    await completeLogin(userId);
+
+    const nextId = store.pinSetupQueue.shift();
+    if (nextId) {
+      const next = getState().users.find((u) => u.id === nextId);
+      clearAuthInputs();
+      showAuthMessage('');
+      if (next) {
+        showPinSetup(next.id, next.name);
+        return;
+      }
+    }
+
+    const resumeId = store.pinSetupResumeUserId || userId;
+    store.pinSetupResumeUserId = null;
+    // 이미 그 계정으로 들어가 있으면 세션만 유지 (계정 전환처럼 보이지 않게)
+    if (store.authenticatedUserId === resumeId) {
+      hideAuthOverlay();
+      renderAll();
+      return;
+    }
+    await completeLogin(resumeId);
   } catch (err) {
     console.error(err);
     showAuthMessage(err.message || '비밀번호 설정에 실패했습니다.', 'error');
@@ -259,8 +303,8 @@ export async function renameUser() {
   if (!u) return;
   const name = prompt('새 이름', u.name);
   if (!name?.trim()) return;
-  if (getState().users.some((x) => x.id !== u.id && x.name === name.trim())) {
-    return alert('같은 이름이 있습니다.');
+  if (isUserNameTaken(name, u.id)) {
+    return alert('이미 있는 이름입니다. 다른 이름을 입력하세요.');
   }
   pushUndo();
   u.name = name.trim();
@@ -288,7 +332,7 @@ export async function deleteUser() {
 
   store.authenticatedUserId = null;
   state.activeUserId = null;
-  await saveState();
+  await saveState(null, { allowEmptyUsers: true });
 
   if (state.users.length) {
     showAuthOverlay('login');
@@ -417,16 +461,51 @@ export function goCreate() {
   document.getElementById('cardTitle').focus();
 }
 
-/** 「새 카드」 — 명시적 새로 만들기. 작성 중 새 카드가 있으면 확인 */
+/** 카드제작 폼에 보호할 내용이 있는지 (기존 수정·작성 중) */
+function createFormHasWork() {
+  try {
+    const d = readCreateForm();
+    return !!(
+      d.id
+      || d.displayText.trim()
+      || d.explanationText.trim()
+      || (d.memo || '').trim()
+      || d.blanks.length
+      || d.outline?.items?.length
+      || (d.title && d.title !== '제목 없음')
+    );
+  } catch {
+    return false;
+  }
+}
+
+function createDraftHasWork(draft) {
+  if (!draft) return false;
+  return !!(
+    draft.id
+    || String(draft.displayText || '').trim()
+    || String(draft.explanationText || '').trim()
+    || String(draft.memo || '').trim()
+    || (draft.blanks || []).length
+    || draft.outline?.items?.length
+    || (draft.title && draft.title !== '제목 없음')
+  );
+}
+
+/** 「새 카드」 — 작성·수정 중이면 확인 후 빈 폼 */
 export function startNewCard() {
   const alreadyOnCreate = store.currentSection === 'create';
-  const draft = getState().ui.createDraft;
-  if (draft && !draft.id) {
-    if (!confirm('작성 중인 새 카드가 있습니다. 비우고 새로 시작할까요?\n(취소 = 이어쓰기)')) {
-      goCreate();
+  const needsConfirm = alreadyOnCreate
+    ? createFormHasWork()
+    : createDraftHasWork(getState().ui.createDraft);
+
+  if (needsConfirm) {
+    if (!confirm('지금 작성·수정 중인 내용이 있습니다.\n새 카드를 만들까요?\n(취소 = 현재 내용 유지)')) {
+      if (!alreadyOnCreate) goCreate();
       return;
     }
   }
+
   getState().ui.createDraft = null;
   persist();
   // 카드제작 화면에서 다시 「새 카드」→ 완전 초기화. 관리 등에서 진입할 때만 폴더 컨텍스트 반영
@@ -444,6 +523,13 @@ export function editCard(id) {
   renderCreateForm(draft && draft.id === id ? draft : c);
   showSection('create', { urlExtra: { cardId: id } });
   syncCreateSavedSnapshotFromForm();
+}
+
+/** 학습 중 현재 카드 → 카드제작(수정) 화면 */
+export function editCurrentStudyCard() {
+  const c = store.studyQueue[store.studyIndex];
+  if (!c) return alert('학습 중인 카드가 없습니다.');
+  editCard(c.id);
 }
 
 export async function saveCard() {
@@ -487,12 +573,13 @@ async function saveCardWithOptions({ silent = false } = {}) {
 
   if (existing) {
     Object.assign(existing, draft, { userId: getActiveUser().id, updatedAt: now, isSample: false });
+    if (!existing.author) existing.author = getActiveUser().name;
     existing.originalText = draft.displayText;
     existing.blanks = draft.blanks.map((b) => ({ ...b, cardId: existing.id }));
   } else {
     const newId = uid('c');
     const card = migrateCard({
-      ...draft, id: newId, userId: getActiveUser().id,
+      ...draft, id: newId, userId: getActiveUser().id, author: getActiveUser().name,
       createdAt: now, updatedAt: now, rounds: 0, wrongCount: 0, isSample: false,
     });
     card.originalText = card.displayText;
@@ -500,6 +587,7 @@ async function saveCardWithOptions({ silent = false } = {}) {
     state.cards.unshift(card);
     store.activeManageId = card.id;
     document.getElementById('cardId').value = card.id;
+    syncCreateDeleteButton(true);
   }
 
   state.ui.createDraft = null;
@@ -542,19 +630,18 @@ export function syncCreateSavedSnapshotFromForm() {
 
 export async function deleteCurrentCard() {
   const id = document.getElementById('cardId').value;
-  if (!id) {
-    // 저장 전 새 카드 → 작성 중 초안 비우기
-    getState().ui.createDraft = null;
-    persist();
-    renderCreateForm(null);
-    return;
-  }
-  await deleteCardById(id);
+  if (!id) return; // 미등록 카드 — 버튼 비활성. 방어용.
+
+  const deleted = await deleteCardById(id);
+  if (!deleted) return;
+  getState().ui.createDraft = null;
+  persist();
   renderCreateForm(null);
 }
 
+/** @returns {Promise<boolean>} 실제 삭제 여부 */
 export async function deleteCardById(id) {
-  if (!confirm('이 카드를 삭제할까요?')) return;
+  if (!confirm('이 카드를 삭제할까요?')) return false;
   pushUndo();
   const state = getState();
   state.cards = state.cards.filter((c) => c.id !== id);
@@ -562,6 +649,7 @@ export async function deleteCardById(id) {
   if (store.activeManageId === id) renderManageDetail(null);
   await saveState();
   renderAll();
+  return true;
 }
 
 export async function moveCardFolder(cardId, folderId) {
@@ -763,19 +851,27 @@ export function restoreStudySession(index) {
   return true;
 }
 
-/** 학습 setup 폼 → 설정 객체 (folderId·flag는 모달/스와치로 따로 정해 보존) */
+/** 학습 setup 폼 → 설정 객체 (folderIds·flag는 모달/스와치로 따로 정해 보존) */
 export function readStudyConfig() {
   const prev = getState().ui.studyConfig || {};
-  return {
+  const folderIds = Array.isArray(prev.folderIds)
+    ? prev.folderIds
+    : (prev.folderId ? [prev.folderId] : []);
+  const next = {
     ...prev,
     scope: document.getElementById('studyScope')?.value || 'all',
     order: document.getElementById('studyOrder')?.value || 'created',
+    folderIds,
   };
+  delete next.folderId;
+  return next;
 }
 
 /** 범위/순서 변경 → 설정 저장 + 요약 갱신 */
 export function onStudyConfigChange() {
-  getState().ui.studyConfig = readStudyConfig();
+  const cfg = readStudyConfig();
+  if (cfg.scope === 'selected') cfg.scope = 'all';
+  getState().ui.studyConfig = cfg;
   persist();
   renderStudySetup();
 }
@@ -801,14 +897,46 @@ export function pickFilterFlag(flag) {
   renderAll();
 }
 
-/** 폴더 선택 모달 (범위=폴더) */
+/** 폴더 선택 모달 (범위=폴더, 여러 개 토글) */
 export function openStudyFolderModal() {
   const cfg = getState().ui.studyConfig || {};
-  openStudyFolderPicker(cfg.folderId || null, (id) => {
-    getState().ui.studyConfig = { ...getState().ui.studyConfig, folderId: id };
+  const current = Array.isArray(cfg.folderIds)
+    ? cfg.folderIds
+    : (cfg.folderId ? [cfg.folderId] : []);
+  openStudyFolderPicker(current, (ids) => {
+    const user = getActiveUser();
+    const folderIds = pruneEmptyStudyFolders(ids, user?.id);
+    if (!folderIds.length) return;
+    getState().ui.studyConfig = {
+      ...getState().ui.studyConfig,
+      folderIds,
+      folderId: undefined,
+    };
+    delete getState().ui.studyConfig.folderId;
     persist();
     renderStudySetup();
   });
+}
+
+/** 학습 setup 미리보기 — 카드 체크 */
+export function toggleStudySetupCard(id, checked) {
+  const cfg = readStudyConfig();
+  if (cfg.scope === 'selected') cfg.scope = 'all';
+  const pool = buildStudyQueue({ ...cfg }).map((c) => c.id);
+  const set = store.studySetupCheckedIds == null
+    ? new Set(pool)
+    : new Set(store.studySetupCheckedIds);
+  if (checked) set.add(id);
+  else set.delete(id);
+  store.studySetupCheckedIds = [...set];
+  // 목록 전체 재렌더 금지 — 스크롤이 맨 위로 튀는 UX 방지
+  refreshStudySetupChecksOnly();
+}
+
+/** 학습 setup 미리보기 — 전체 선택/해제 */
+export function selectStudySetupAll(all) {
+  store.studySetupCheckedIds = all ? null : [];
+  renderStudySetup();
 }
 
 /** 카드 선택 모달 (범위=선택 카드) — selectedIds에 반영(사이드바와 공유) */
@@ -823,13 +951,51 @@ export function openStudyCardModal() {
 
 export function startStudy() {
   const cfg = readStudyConfig();
+  if (cfg.scope === 'selected') cfg.scope = 'all';
   getState().ui.studyConfig = cfg;
-  let cards = buildStudyQueue({ ...cfg, selectedIds: getState().selectedIds });
+  const pool = buildStudyQueue({ ...cfg });
+  const checked = store.studySetupCheckedIds == null
+    ? new Set(pool.map((c) => c.id))
+    : new Set(store.studySetupCheckedIds);
+  let cards = pool.filter((c) => checked.has(c.id));
   if (cfg.order === 'random') cards = shuffle(cards);
   if (!cards.length) return alert('학습할 카드가 없습니다. 범위를 확인하세요.');
 
   const sess = getPersistedStudySession();
   if (sess?.cardIds?.length && !confirm('진행 중인 학습이 있습니다. 새로 시작할까요?')) return;
+
+  store.studyQueue = cards;
+  store.studyIndex = 0;
+  store._studyCardId = null;
+  store.currentBlankStatuses = [];
+  saveStudySession({ resetProgress: true });
+  persist();
+  renderStudyCard();
+  showSection('study-play', { urlExtra: { index: 0 } });
+}
+
+/** 카드관리 — 선택 폴더(+하위)로 바로 학습 시작 */
+export function startStudyFromManageFolder() {
+  const folderId = store.activeFolderId;
+  const user = getActiveUser();
+  if (!folderId || !user) return;
+  if (!countCardsInFolder(folderId, user.id)) return;
+
+  const order = getState().ui.studyConfig?.order || 'created';
+  let cards = buildStudyQueue({ scope: 'folder', order, folderIds: [folderId] });
+  if (order === 'random') cards = shuffle(cards);
+  if (!cards.length) return alert('학습할 카드가 없습니다.');
+
+  const sess = getPersistedStudySession();
+  if (sess?.cardIds?.length && !confirm('진행 중인 학습이 있습니다. 이 폴더로 새로 시작할까요?')) return;
+
+  getState().ui.studyConfig = {
+    ...getState().ui.studyConfig,
+    scope: 'folder',
+    folderIds: [folderId],
+    order,
+  };
+  delete getState().ui.studyConfig.folderId;
 
   store.studyQueue = cards;
   store.studyIndex = 0;
@@ -876,6 +1042,10 @@ export function startSelectedStudy() {
 export function studyOne(id) {
   const c = getCard(id);
   if (!c) return;
+
+  const sess = getPersistedStudySession();
+  if (sess?.cardIds?.length && !confirm('진행 중인 학습이 있습니다. 이 카드로 새로 시작할까요?')) return;
+
   store.studyQueue = [c];
   store.studyIndex = 0;
   store._studyCardId = null;
@@ -886,20 +1056,23 @@ export function studyOne(id) {
   showSection('study-play', { urlExtra: { index: 0 } });
 }
 
-/** 빈칸 하나 Enter 채점 */
-export async function gradeBlankOnEnter(order) {
+/** 빈칸 하나 채점 (Enter / 포커스 이탈 공용) */
+export async function gradeBlank(order, { onlyIfPending = false, focusAfter = order } = {}) {
   const c = store.studyQueue[store.studyIndex];
   if (!c) return;
   syncDraftFromDOM();
   const user = getBlankInputValue(order);
   if (!user) return;
 
+  let st = store.currentBlankStatuses.find((s) => s.order === order);
+  if (!st) return;
+  // 이미 같은 내용으로 채점됐으면 스킵 (Enter 직후 blur 등)
+  if (onlyIfPending && st.checked && String(st.user ?? '').trim() === user) return;
+
   const threshold = getGradingThreshold();
   const blank = c.blanks.find((b) => b.order === order);
   const { correct, score } = checkAnswer(user, acceptedAnswers(blank), threshold);
 
-  let st = store.currentBlankStatuses.find((s) => s.order === order);
-  if (!st) return;
   st.checked = true;
   st.correct = correct;
   st.score = score;
@@ -916,7 +1089,8 @@ export async function gradeBlankOnEnter(order) {
     roundedUp = applyCardResult(c, store.currentBlankStatuses);
   }
 
-  refreshStudyViews({ focusOrder: order });
+  // focusAfter: Enter는 같은 칸, 이탈 채점은 이동한 칸(없으면 포커스 복구 안 함)
+  refreshStudyViews(focusAfter != null ? { focusOrder: focusAfter } : {});
   const ok = store.currentBlankStatuses.filter((s) => s.correct).length;
   const total = c.blanks.length;
   document.getElementById('gradeResult').textContent = correct
@@ -927,6 +1101,16 @@ export async function gradeBlankOnEnter(order) {
   await persist();
 
   if (roundedUp) await celebrateRound(c, order);
+}
+
+/** @deprecated 이름 호환 — gradeBlank 사용 */
+export function gradeBlankOnEnter(order) {
+  return gradeBlank(order);
+}
+
+/** 빈칸에서 포커스가 나갈 때 — 내용 있고 미채점이면 채점 */
+export function gradeBlankOnLeave(order, { focusAfter = null } = {}) {
+  return gradeBlank(order, { onlyIfPending: true, focusAfter });
 }
 
 export async function gradeCurrent() {
@@ -1038,14 +1222,22 @@ async function finishStudySet({ completed = false } = {}) {
 export function hideAnswers() {
   const c = store.studyQueue[store.studyIndex];
   if (!c) return;
+  // 입력·채점 모두 초기화. DOM을 먼저 비운 뒤 저장해야 syncDraftFromDOM이 옛 값을 다시 안 넣음.
   store.currentBlankStatuses = c.blanks.map((b) => ({
     order: b.order, checked: false, correct: false, score: 0, user: '', revealed: false,
   }));
+  c.blanks.forEach((b) => {
+    b.lastInput = '';
+    b.lastResult = null;
+    b.manualResult = null;
+  });
   store.studyAttemptRecorded = false;
   store.studyRoundRecorded = false;
   store._studyCardId = c.id;
-  saveStudySession();
+  store.currentBlankFocus = null;
   renderStudyCard();
+  saveStudySession();
+  persist();
   document.getElementById('gradeResult').textContent = '다시 풀 준비됐습니다.';
 }
 
@@ -1154,26 +1346,123 @@ export async function undoAppState() {
 
 export function handleExport(scope) {
   if (scope === 'folder') {
-    openExportFolderPicker((folderId) => exportData('folder', folderId));
+    openExportFolderPicker((folderId) => {
+      const r = exportData('folder', folderId);
+      if (!r?.ok) alert(r?.reason || '내보내기에 실패했습니다.');
+    });
     return;
   }
-  exportData(scope, store.activeFolderId);
+  const r = exportData(scope, store.activeFolderId);
+  if (!r?.ok) alert(r?.reason || '내보내기에 실패했습니다.');
 }
 
 export async function handleImport(file) {
   if (!file) return;
+  let kind;
+  let data;
   try {
-    const mode = confirm('확인=병합 / 취소=덮어쓰기') ? 'merge' : 'overwrite';
-    pushUndo();
-    const next = await importFromFile(file, mode);
-    if (mode === 'overwrite') setState(next);
-    await saveState();
-    renderStudyCard();
-    renderAll();
-    alert('가져오기 완료');
-  } catch {
-    alert('JSON 파싱 실패');
+    ({ kind, data } = await readImportFile(file));
+  } catch (err) {
+    alert(err.message || '가져오기에 실패했습니다.');
+    return;
   }
+
+  try {
+    if (kind === 'folder') await importSharedFolder(data);
+    else await importUsers(kind, data);
+  } catch (err) {
+    alert(err.message || '가져오기에 실패했습니다.');
+  }
+}
+
+async function importSharedFolder(data) {
+  if (!getActiveUser()) {
+    alert('로그인한 뒤에 폴더를 가져올 수 있습니다.');
+    return;
+  }
+
+  const desc = describeImport('folder', data);
+  const preview = previewFolderImport(data);
+  const dupes = preview.duplicates;
+  const renameNote = preview.finalName !== preview.rootName
+    ? `\n폴더 이름이 겹쳐 「${preview.finalName}」로 들어옵니다.`
+    : '';
+
+  let skipDuplicates = true;
+  if (dupes.length) {
+    const pick = await openChoice({
+      title: desc.title,
+      message: `${desc.message}${renameNote}\n\n이미 가지고 있는 카드 ${dupes.length}장이 있습니다. 제목·해설·빈칸이 같습니다.`,
+      items: dupes.map((c) => c.title || '(제목 없음)'),
+      choices: [
+        { value: 'skip', label: '중복은 건너뛰기' },
+        { value: 'keep', label: '중복도 가져오기' },
+        { value: null, label: '취소' },
+      ],
+    });
+    if (!pick) return;
+    skipDuplicates = pick === 'skip';
+  } else {
+    const pick = await openChoice({
+      title: desc.title,
+      message: `${desc.message}${renameNote}`,
+      choices: [
+        { value: 'ok', label: '가져오기' },
+        { value: null, label: '취소' },
+      ],
+    });
+    if (pick !== 'ok') return;
+  }
+
+  pushUndo();
+  const r = applyFolderImport(data, { skipDuplicates });
+  await saveState();
+  renderStudyCard();
+  renderAll();
+
+  const lines = [`카드 ${r.added}장을 가져왔습니다.`];
+  if (r.skipped) lines.push(`중복 ${r.skipped}장은 건너뛰었습니다.`);
+  if (r.renamedRoot) lines.push(`폴더 이름이 겹쳐 「${r.renamedRoot.to}」로 들어왔습니다.`);
+  alert(lines.join('\n'));
+}
+
+async function importUsers(kind, data) {
+  if (!(data.users || []).length) {
+    alert('파일에 사용자 정보가 없습니다.');
+    return;
+  }
+
+  const desc = describeImport(kind, data);
+  const preview = previewUsersImport(data);
+  const renames = preview.users.filter((u) => u.fromName !== u.finalName);
+  const renameNote = renames.length
+    ? `\n이름이 겹쳐 ${renames.map((u) => `「${u.fromName}」→「${u.finalName}」`).join(', ')}로 들어옵니다.`
+    : '';
+
+  const pick = await openChoice({
+    title: desc.title,
+    message: `${desc.message}${renameNote}\n기존 계정은 그대로 두고, 새 계정을 추가합니다.`,
+    items: preview.users.map((u) => u.finalName),
+    choices: [
+      { value: 'ok', label: '가져오기' },
+      { value: null, label: '취소' },
+    ],
+  });
+  if (pick !== 'ok') return;
+
+  const wasLoggedIn = store.authenticatedUserId;
+  pushUndo();
+  const r = applyUsersImport(data);
+  await saveState();
+  renderStudyCard();
+  renderAll();
+
+  // 기존 세션은 유지. 가져온 계정만 PIN 설정 큐에 넣고, 끝나면 원래 계정으로 돌아온다.
+  const importedIds = r.users.map((u) => u.id);
+  store.pinSetupQueue = importedIds.slice(1);
+  store.pinSetupResumeUserId = wasLoggedIn || importedIds[0];
+  const first = getState().users.find((u) => u.id === importedIds[0]);
+  if (first) showPinSetup(first.id, first.name);
 }
 
 /** 카드 제작 해설 칩 에디터가 바뀜 → 미리보기·정답 슬롯 재구성 */
@@ -1192,4 +1481,11 @@ export function onStudyEditInput() {
 }
 
 export { focusBlankUI as focusBlank, renderStudyEditPreview };
-export { handleBlankPeekOver, handleBlankPeekOut, resetBlankGradeIfEdited };
+export {
+  handleBlankPeekOver,
+  handleBlankPeekOut,
+  handleBlankPeekMove,
+  armBlankPeekSticky,
+  retainBlankPeekAfterEdit,
+  resetBlankGradeIfEdited,
+};

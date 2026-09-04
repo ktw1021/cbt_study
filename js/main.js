@@ -9,6 +9,12 @@ import { showSection, toggleSidebar, applySidebarState, toggleMobileMenu, closeM
 import { renderAll, renderManageDetail, renderStudyCard, renderCreateForm } from './ui/render.js';
 import { getCard } from './domain/queries.js';
 import { showAuthOverlay, renderAuthUserLists, setAuthTab, showAuthMessage } from './ui/auth.js';
+import {
+  ensureAlphaAccess,
+  submitAlphaGateCode,
+  getPendingAlphaPlanner,
+  isAlphaGateVisible,
+} from './ui/alpha-gate.js';
 import { formatProblemHtml } from './ui/prompt.js';
 import * as actions from './app/actions.js';
 import { chipRemoveEl, chipSetAliases } from './ui/chip-editor.js';
@@ -17,6 +23,12 @@ import { renderPatchPage } from './ui/patch-notes.js';
 import { initCaretAutoscroll } from './ui/caret-scroll.js';
 import { saveStudySession } from './services/study-session.js';
 import { syncThresholdControls, setGradingThreshold } from './ui/study.js';
+import {
+  blankFieldText,
+  normalizeBlankFieldDom,
+  syncBlankRest,
+  focusBlankField,
+} from './ui/blank-input.js';
 import { handleOutlineModalAction, closeOutlineModal, isOutlineModalOpen } from './ui/outline-modal.js';
 import { toggleOutlineSummary } from './ui/create.js';
 import { actionGuardKey, runGuardedClick } from './utils/action-guard.js';
@@ -76,6 +88,10 @@ function handleHashRoute(fromInit = false) {
 async function init() {
   bindEvents();
 
+  // 알파 테스터 관문 — 통과 전에는 앱/로그인 UI로 진행하지 않음
+  const alpha = await ensureAlphaAccess();
+  if (!alpha.ok) return;
+
   try {
     const saved = await loadState();
     setState(migrateState(saved));
@@ -117,6 +133,9 @@ async function init() {
 
   window.addEventListener('resize', handleViewportChange);
   window.addEventListener('resize', () => syncSidebarHeightToMain());
+  document.addEventListener('paste', onBlankPaste);
+  document.addEventListener('mousedown', onBlankWrapMouseDown);
+  document.addEventListener('compositionend', onBlankCompositionEnd);
 }
 
 function bindEvents() {
@@ -127,8 +146,10 @@ function bindEvents() {
   document.addEventListener('change', onChange);
   document.addEventListener('input', onInput);
   document.addEventListener('keydown', onKeydown);
+  document.addEventListener('focusout', onBlankFocusOut);
   document.addEventListener('mouseover', actions.handleBlankPeekOver);
   document.addEventListener('mouseout', actions.handleBlankPeekOut);
+  document.addEventListener('mousemove', actions.handleBlankPeekMove);
   initCaretAutoscroll();
 
   const folderTree = document.getElementById('folderTree');
@@ -273,6 +294,9 @@ function onClick(e) {
     'auth-setup': () => runAuthAction(actions.setupUserPin),
     'auth-tab-login': () => { setAuthTab('login'); showAuthMessage(''); },
     'auth-tab-register': () => { setAuthTab('register'); showAuthMessage(''); },
+    'alpha-gate-submit': () => {
+      submitAlphaGateCode(getPendingAlphaPlanner());
+    },
     'logout': () => runAuthAction(actions.logoutUser),
     'rename-user': () => actions.renameUser(),
     'delete-user': () => actions.deleteUser(),
@@ -301,6 +325,9 @@ function onClick(e) {
     'outline-modal-cancel': () => { handleOutlineModalAction('outline-modal-cancel'); },
     'start-study': () => actions.startStudy(),
     'resume-study': () => actions.resumeStudy(),
+    'study-manage-folder': () => actions.startStudyFromManageFolder(),
+    'study-setup-select-all': () => actions.selectStudySetupAll(true),
+    'study-setup-deselect-all': () => actions.selectStudySetupAll(false),
     'pick-study-folder': () => actions.openStudyFolderModal(),
     'pick-study-cards': () => actions.openStudyCardModal(),
     'pick-study-flag': () => actions.pickStudyFlag(Number(btn.dataset.flag)),
@@ -314,6 +341,7 @@ function onClick(e) {
     'round-plus': () => actions.adjustRounds(1),
     'prev-card': () => actions.prevCard(),
     'next-card': () => actions.nextCard(),
+    'edit-study-card': () => actions.editCurrentStudyCard(),
     'toggle-tree': () => actions.toggleTree(btn.dataset.id),
     'select-folder': () => actions.selectFolder(btn.dataset.id),
     'create-folder': () => actions.createFolder(btn.dataset.parent || null),
@@ -351,6 +379,9 @@ function onClick(e) {
 function onChange(e) {
   if (e.target.id === 'importFile') actions.handleImport(e.target.files?.[0]).then(() => { e.target.value = ''; });
   if (e.target.dataset.action === 'toggle-select') actions.toggleSelected(e.target.dataset.id, e.target.checked);
+  if (e.target.dataset.action === 'toggle-study-setup-card') {
+    actions.toggleStudySetupCard(e.target.dataset.id, e.target.checked);
+  }
   if (e.target.dataset.action === 'move-card-folder') actions.moveCardFolder(e.target.dataset.cardId, e.target.value);
   if (['searchInput', 'wrongFilter'].includes(e.target.id)) renderAll();
   if (e.target.id === 'filterFolderSelect') actions.onFilterFolderChange();
@@ -361,6 +392,52 @@ function onChange(e) {
   }
 }
 
+/** 빈칸 포커스 이탈 → 미채점이면 채점 (탭·다른 빈칸 클릭 등) */
+function onBlankFocusOut(e) {
+  const input = e.target;
+  if (!input?.matches?.('.blank-field')) return;
+  if (store.currentSection !== 'study-play') return;
+  if (input.isComposing || e.isComposing) return;
+  normalizeBlankFieldDom(input);
+  const order = Number(input.dataset.blankOrder);
+  if (!Number.isFinite(order)) return;
+  const nextOrder = e.relatedTarget?.matches?.('.blank-field')
+    ? Number(e.relatedTarget.dataset.blankOrder)
+    : null;
+  queueMicrotask(() => {
+    actions.gradeBlankOnLeave(order, {
+      focusAfter: Number.isFinite(nextOrder) ? nextOrder : null,
+    });
+  });
+}
+
+/** ○○○ 마스크 클릭해도 입력칸으로 포커스 */
+function onBlankWrapMouseDown(e) {
+  const wrap = e.target.closest?.('.blank-wrap');
+  if (!wrap || store.currentSection !== 'study-play') return;
+  const field = wrap.querySelector('.blank-field');
+  if (!field) return;
+  if (e.target === field || field.contains(e.target)) return;
+  e.preventDefault();
+  focusBlankField(field);
+}
+
+function onBlankPaste(e) {
+  const el = e.target?.closest?.('.blank-field');
+  if (!el) return;
+  e.preventDefault();
+  const text = String(e.clipboardData?.getData('text/plain') || '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ');
+  document.execCommand('insertText', false, text);
+  syncBlankRest(el);
+}
+
+function onBlankCompositionEnd(e) {
+  if (!e.target?.matches?.('.blank-field')) return;
+  normalizeBlankFieldDom(e.target);
+}
+
 function onInput(e) {
   if (e.target.id === 'promptTemplate') {
     document.getElementById('promptPreview').innerHTML = formatProblemHtml(e.target.value);
@@ -369,15 +446,16 @@ function onInput(e) {
   if (e.target.id === 'explanationTemplate') { actions.onCreateInput(); return; }
   if (e.target.id === 'studyEditExplanation') { actions.onStudyEditInput(); return; }
   if (e.target.matches('input[data-alias-for]')) {
-    // 칩에만 반영하고 슬롯은 다시 그리지 않는다 (타이핑 중 커서 유실 방지)
     chipSetAliases(e.target.dataset.editor, Number(e.target.dataset.aliasFor), e.target.value);
     return;
   }
-  if (e.target.matches('input.blank-field')) {
+  if (e.target.matches('.blank-field')) {
+    actions.armBlankPeekSticky(e.target);
+    if (!e.isComposing) normalizeBlankFieldDom(e.target);
+    else syncBlankRest(e.target);
     const order = Number(e.target.dataset.blankOrder);
-    actions.resetBlankGradeIfEdited(order, e.target.value);
-    const n = Math.max(e.target.placeholder?.length || 0, e.target.value.length, 1);
-    e.target.style.width = `${n}em`;
+    actions.resetBlankGradeIfEdited(order, blankFieldText(e.target));
+    actions.retainBlankPeekAfterEdit(e.target);
     clearTimeout(onInput._blankSave);
     onInput._blankSave = setTimeout(() => { saveStudySession(); persist(); }, 500);
   }
@@ -425,7 +503,7 @@ function onKeydown(e) {
 
   if (isBlankField && e.key === 'Enter') {
     e.preventDefault();
-    actions.gradeBlankOnEnter(Number(active.dataset.blankOrder));
+    actions.gradeBlank(Number(active.dataset.blankOrder));
     return;
   }
 
@@ -441,6 +519,12 @@ function onKeydown(e) {
     }
   }
 
+  if (isAlphaGateVisible() && e.key === 'Enter' && !e.isComposing) {
+    if (active?.matches?.('#alphaGateCode')) {
+      e.preventDefault();
+      submitAlphaGateCode(getPendingAlphaPlanner());
+    }
+  }
 }
 
 init();

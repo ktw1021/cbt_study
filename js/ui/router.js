@@ -103,6 +103,10 @@ export function showSection(name, { urlExtra = {}, replaceUrl = false, fromHash 
   document.getElementById('patchSection').classList.toggle('hidden', !isPatch);
 
   document.body.classList.toggle('study-playing', name === 'study-play' && store.studyQueue.length > 0);
+  document.body.classList.toggle('section-create', isCreate);
+  document.body.classList.toggle('section-manage', isManage);
+  document.body.classList.toggle('section-study', isStudy);
+  document.body.classList.toggle('section-patch', isPatch);
 
   applyStudyFocusSidebar(prevSection, name);
   syncNavActive(name);

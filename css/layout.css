@@ -26,6 +26,13 @@ body.sidebar-collapsed .app {
   width: 300px;
 }
 
+/* 접힌 뒤에도 wrap이 300px로 본문 위를 덮어 클릭을 가로채지 않게 */
+body.sidebar-collapsed .sidebar-wrap {
+  width: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
 /* 사이드바: 본문보다 길면 내부 스크롤 (JS가 max-height 동기화) */
 .sidebar {
   position: static;
@@ -99,7 +106,8 @@ body:not(.sidebar-collapsed) .sidebar-toggle {
 .topbar-title {
   font-size: 16px;
   font-weight: 800;
-  flex: 1;
+  flex: 0 1 auto;
+  max-width: 42%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -110,11 +118,23 @@ body:not(.sidebar-collapsed) .sidebar-toggle {
   display: flex;
   gap: 4px;
   flex-shrink: 0;
+  margin-left: 6px;
 }
 
 .topbar-nav .nav-btn {
   padding: 6px 8px;
   font-size: 11px;
+}
+
+/* 좁은 화면 우상단 저장 — 카드제작일 때만 */
+.topbar-save {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: none;
+}
+
+body.section-create .topbar-save {
+  display: inline-flex;
 }
 
 .mobile-overlay {
@@ -135,6 +155,26 @@ body.mobile-menu-open .mobile-overlay {
 }
 
 .title { font-size: 22px; font-weight: 800; margin-bottom: 4px; }
+
+/* 앱 타이틀 = 홈(카드관리) 버튼 — 전역 button 스타일을 텍스트로 되돌린다 */
+.app-home-btn {
+  display: block;
+  padding: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+}
+
+.app-home-btn:hover { color: var(--blue); }
+
+.app-home-btn:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
 .sub { font-size: 12px; color: var(--muted); line-height: 1.5; margin-bottom: 12px; }
 
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -156,7 +196,7 @@ body.mobile-menu-open .mobile-overlay {
 /* 뷰포트 기준 높이 — 내용만큼 페이지 늘어나지 않고, 칸 안에서만 스크롤 */
 .study-layout {
   display: grid;
-  grid-template-columns: 4.5fr 5.5fr;
+  grid-template-columns: minmax(0, 4.5fr) minmax(0, 5.5fr);
   gap: 14px;
   align-items: stretch;
   flex: none;
@@ -191,6 +231,7 @@ body.study-playing .study-layout {
 .study-panel {
   display: flex;
   flex-direction: column;
+  min-width: 0;
   min-height: 0;
   height: 100%;
   overflow: hidden;
@@ -330,6 +371,9 @@ body.study-playing .study-layout {
 
   body.mobile-menu-open .sidebar-wrap {
     display: block;
+    width: auto;
+    overflow: auto;
+    pointer-events: auto;
   }
 
   .sidebar {
@@ -369,4 +413,22 @@ body.study-playing .study-layout {
 @media (max-width: 1100px) {
   .grid2, .study-layout, .create-split, .manage-split { grid-template-columns: 1fr; }
   .stats { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* 넓은 화면(탑바 없음) — 카드제작 헤더가 스크롤을 따라감 */
+@media (min-width: 901px) {
+  #createSection.panel {
+    overflow: visible;
+  }
+
+  #createSection .create-head {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    margin: -4px -14px 8px;
+    padding: 10px 14px;
+    background: var(--panel, #fff);
+    border-bottom: 1px solid var(--line);
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04);
+  }
 }

@@ -136,7 +136,13 @@
 .study-step-nav {
   margin-left: auto;
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+/* 이전/다음보다 조금 왼쪽으로 띄운 수정 진입 */
+.study-step-nav .study-edit-jump {
+  margin-right: 10px;
 }
 
 .study-play-bar {
@@ -270,7 +276,25 @@
 /* ── 학습 setup 미리보기 카드 목록 ── */
 .study-preview { margin-top: 12px; }
 .study-preview:empty { display: none; }
-.study-preview-head { margin-bottom: 6px; font-weight: 600; }
+.study-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+.study-preview-head-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.study-preview-head-actions .small {
+  padding: 3px 8px;
+  font-size: 12px;
+  line-height: 1.2;
+}
 .study-preview-list {
   max-height: 220px;
   overflow-y: auto;
@@ -287,8 +311,36 @@
   font-size: 13px;
 }
 .study-preview-item:last-child { border-bottom: none; }
+.study-preview-item:hover { background: #f8fafc; }
+.study-preview-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  cursor: pointer;
+  margin: 0;
+}
+.study-preview-item input[type="checkbox"] {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  cursor: pointer;
+}
 .study-preview-title { flex: 1; min-width: 0; font-weight: 600; }
 .study-preview-meta { font-size: 12px; color: var(--muted, #64748b); flex-shrink: 0; }
+.study-preview-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.study-preview-actions .small {
+  padding: 3px 8px;
+  font-size: 12px;
+  line-height: 1.2;
+}
 
 /* ── 카드관리 — 폴더·목록 | 상세 (폴더 쪽 넓게) ── */
 .manage-split {
@@ -328,6 +380,18 @@
 .folder-breadcrumb .crumb:hover .tree-meta { color: var(--muted); }
 .folder-breadcrumb .crumb.active .crumb-label { color: var(--ink, #1e293b); font-weight: 700; }
 .folder-breadcrumb .crumb-sep { color: #cbd5e1; }
+
+.folder-breadcrumb .folder-study-btn {
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+.folder-breadcrumb .folder-study-btn.is-disabled,
+.folder-breadcrumb .folder-study-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(0.35);
+}
 
 .between {
   display: flex;
@@ -517,14 +581,18 @@ button.nav-btn.pink-nav.active { background: var(--pink); color: #fff; }
 }
 
 .blank-inline {
-  display: inline-block;
-  min-width: 90px;
+  display: inline;
   margin: 0 2px;
-  padding: 2px 8px;
+  padding: 0 2px 4px;
   border-bottom: 3px solid #94a3b8;
   font-weight: 700;
   color: #475569;
   border-radius: 6px 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .blank-inline.blank-shape,
@@ -534,18 +602,9 @@ button.nav-btn.pink-nav.active { background: var(--pink); color: #fff; }
 }
 
 .blank-inline.blank-shape {
-  min-width: auto;
-  padding: 2px 6px;
+  font-weight: 600;
   border-bottom-style: dashed;
-  font-weight: 600;
-}
-
-.blank-field-shape::placeholder {
-  font-style: normal;
-  font-weight: 600;
-  letter-spacing: normal;
-  color: #64748b;
-  opacity: 1;
+  border-bottom-width: 2px;
 }
 
 .blank-inline.study { cursor: pointer; border-bottom-color: var(--blue); background: #eff6ff; }
@@ -623,6 +682,8 @@ select.folder-select {
 /* 칩(chip) 빈칸 에디터 */
 .chip-editor {
   width: 100%;
+  max-width: 100%;
+  min-width: 0;
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 10px 12px;
@@ -631,6 +692,8 @@ select.folder-select {
   background: #fff;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
+  overflow-x: hidden;
   overflow-y: auto;
   outline: none;
 }
@@ -648,7 +711,10 @@ select.folder-select {
   border-radius: 4px;
   padding: 1px 2px;
   font-weight: 700;
-  white-space: nowrap;
+  /* 긴 칩이 칸을 밀지 않도록 줄바꿈만 허용 */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 .cz-chip-x {
   all: unset;
@@ -723,7 +789,11 @@ select.folder-select {
   opacity: 0;
   transform: translateY(4px);
   transition: opacity .18s ease, transform .18s ease;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.45;
+  max-width: min(34rem, calc(100vw - 24px));
 }
 .blank-peek.show { opacity: .96; transform: translateY(0); }
 
@@ -913,7 +983,20 @@ select.folder-select {
 /* 확인·선택 모달 */
 .choice-modal { max-width: 420px; text-align: center; }
 .choice-modal h3 { margin-bottom: 6px; }
-.choice-message { margin-bottom: 14px; }
+.choice-message { margin-bottom: 14px; white-space: pre-line; }
+.choice-items {
+  text-align: left;
+  max-height: 220px;
+  overflow: auto;
+  margin: 0 0 14px;
+  padding: 8px 12px 8px 28px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.choice-items li { margin: 2px 0; }
 .choice-actions { justify-content: center; gap: 8px; }
 .choice-actions button { min-width: 96px; }
 .choice-actions button:focus-visible {
@@ -1201,7 +1284,7 @@ code { background: #eef2ff; padding: 1px 5px; border-radius: 4px; font-size: 12p
 /* 카드제작 — 문제/해설 분리 */
 .create-split {
   display: grid;
-  grid-template-columns: 4.5fr 5.5fr;
+  grid-template-columns: minmax(0, 4.5fr) minmax(0, 5.5fr);
   gap: 14px;
   margin-top: 12px;
 }
@@ -1214,6 +1297,7 @@ code { background: #eef2ff; padding: 1px 5px; border-radius: 4px; font-size: 12p
   display: flex;
   flex-direction: column;
   gap: 8px;
+  min-width: 0;
 }
 
 .create-panel-foot {
@@ -1262,31 +1346,60 @@ code { background: #eef2ff; padding: 1px 5px; border-radius: 4px; font-size: 12p
   min-width: 52px;
 }
 
-/* 해설 인라인 빈칸 */
+/* 해설 인라인 빈칸 — 입력부 + 남은 ○○○ 마스크 (본문과 함께 줄바꿈) */
 .explanation-body {
   white-space: pre-wrap;
   line-height: 2.2;
   font-size: 16px;
   padding-bottom: 16px;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .blank-wrap {
   display: inline;
-  white-space: nowrap;
+  white-space: normal;
   vertical-align: baseline;
+  cursor: text;
+  padding: 0 1px 4px 0;
+  border-bottom: 2px dashed #94a3b8;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
-/* 폼 input 규칙 제외 — 미리보기 blank-inline.blank-shape 과 동일 계열 */
-.explanation-body input[type="text"].blank-field,
-input.blank-field {
-  display: inline-block;
-  width: auto;
-  box-sizing: content-box;
-  padding: 0 1px 0 0;
+.blank-wrap:hover {
+  background: rgba(37, 99, 235, 0.08);
+  border-bottom-color: #93c5fd;
+}
+
+.blank-wrap:focus-within {
+  background: #eff6ff;
+  border-bottom: 2px solid var(--blue);
+}
+
+.blank-wrap:has(.blank-field.ok) {
+  background: var(--green-soft);
+  border-bottom: 2px solid var(--green);
+}
+
+.blank-wrap:has(.blank-field.bad) {
+  background: var(--red-soft);
+  border-bottom: 2px solid var(--red);
+}
+
+.blank-wrap:has(.blank-field.ok) .blank-field {
+  color: var(--green);
+}
+
+.explanation-body .blank-field,
+.blank-field {
+  display: inline;
   margin: 0;
+  padding: 0;
   border: none;
-  border-bottom: 2px dashed #94a3b8;
-  border-radius: 0;
   background: transparent;
   font: inherit;
   font-size: inherit;
@@ -1295,46 +1408,42 @@ input.blank-field {
   letter-spacing: normal;
   line-height: inherit;
   vertical-align: baseline;
-  overflow: visible;
-}
-
-input.blank-field::placeholder {
-  font-style: normal;
-  font-weight: 600;
-  color: #64748b;
-  opacity: 1;
-}
-
-.blank-field:hover {
-  background: rgba(37, 99, 235, 0.08);
-  border-bottom-color: #93c5fd;
-}
-
-.blank-field:focus {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   outline: none;
-  background: #eff6ff;
-  border-bottom: 2px solid var(--blue);
+  cursor: text;
+  caret-color: var(--blue);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
-.blank-field.ok {
-  background: var(--green-soft);
-  border-bottom: 2px solid var(--green);
-  color: var(--green);
+.blank-field.blank-field-shape {
+  color: inherit;
 }
 
-.blank-field.bad {
-  background: var(--red-soft);
-  border-bottom: 2px solid var(--red);
+.blank-rest {
+  display: inline;
+  color: #64748b;
+  font-weight: 600;
+  letter-spacing: normal;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  pointer-events: none;
+  user-select: none;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 /* 정답 노출 시 빈칸 아래에 정답을 깔아주기 위한 세로 배치 */
 .blank-wrap.revealing {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  vertical-align: top;
+  display: inline;
   white-space: normal;
-  max-width: 100%;
+}
+
+.blank-wrap.revealing .blank-answer {
+  display: block;
 }
 
 /* 채점 후 정답 표시 — 입력칸 바로 아래, 작게, 줄바꿈(가로 스크롤 없음) */
@@ -1348,11 +1457,25 @@ input.blank-field::placeholder {
   line-height: 1.35;
   white-space: normal;
   word-break: break-word;
+  overflow-wrap: anywhere;
   max-width: 34rem;
 }
 
 .blank-answer.wrong { color: var(--red); background: var(--red-soft); }
 .blank-answer.partial { color: var(--green); background: var(--green-soft); }
+
+/* ── 알파 테스터 관문 (로그인보다 위) ── */
+.alpha-gate-overlay {
+  z-index: 3200;
+}
+
+.alpha-gate-card .auth-lead {
+  margin-bottom: 4px;
+}
+
+body.alpha-locked {
+  overflow: hidden;
+}
 
 /* ── 인증 오버레이 ── */
 .auth-overlay {
