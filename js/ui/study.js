@@ -277,6 +277,55 @@ export function renderStudyCard() {
   renderStudyEditForm(c);
 }
 
+/**
+ * 정답은 폭 0 자리표시자(빈칸 끝)에 들어 있지만, 좌표는 해설 본문 기준이다.
+ * 자리표시자 기준으로 왼쪽으로 당기면 overflow-x:hidden 에 잘리거나, 측정 실패 시
+ * 빈칸 끝(문장 한가운데)에 남는다. 빈칸 줄상자 중 가장 왼쪽·자리표시자 세로에 앉힌다.
+ */
+export function layoutBlankAnswers(root = document) {
+  root.querySelectorAll('.blank-answer-holder').forEach((holder) => {
+    const wrap = holder.previousElementSibling;
+    const answer = holder.firstElementChild;
+    const host = holder.closest('.explanation-body');
+    if (!wrap || !answer || !host) return;
+    const lines = [...wrap.getClientRects()].filter((r) => r.width >= 1 && r.height >= 1);
+    if (!lines.length) return;
+    const leftEdge = Math.min(...lines.map((r) => r.left));
+    const hostRect = host.getBoundingClientRect();
+    answer.style.left = `${leftEdge - hostRect.left}px`;
+    answer.style.maxWidth = `${Math.max(hostRect.right - leftEdge - 8, 80)}px`;
+    const gap = 11;
+    const need = gap + answer.offsetHeight;
+    holder.style.height = `${need}px`;
+    holder.style.verticalAlign = `-${need}px`;
+    const hostRect2 = host.getBoundingClientRect();
+    const holderRect2 = holder.getBoundingClientRect();
+    answer.style.top = `${holderRect2.top - hostRect2.top + gap}px`;
+    answer.classList.add('is-placed');
+  });
+}
+
+let answerLayoutRaf = 0;
+/** 그리드 접힘 애니메이션·폰트 반영 뒤에 한 번 더 앉힌다. */
+export function layoutBlankAnswersSoon() {
+  layoutBlankAnswers();
+  cancelAnimationFrame(answerLayoutRaf);
+  answerLayoutRaf = requestAnimationFrame(() => {
+    layoutBlankAnswers();
+    answerLayoutRaf = requestAnimationFrame(() => layoutBlankAnswers());
+  });
+}
+
+let answerLayoutObs = null;
+export function watchBlankAnswerLayout() {
+  if (answerLayoutObs || typeof ResizeObserver === 'undefined') return;
+  answerLayoutObs = new ResizeObserver(() => layoutBlankAnswersSoon());
+  const layout = document.querySelector('.study-layout');
+  const expl = document.getElementById('studyExplanation');
+  if (layout) answerLayoutObs.observe(layout);
+  if (expl) answerLayoutObs.observe(expl);
+}
+
 /** 인라인 빈칸 UI 상태 반영 */
 export function paintInlineBlanks(statuses) {
   statuses.forEach((s) => {
@@ -286,20 +335,21 @@ export function paintInlineBlanks(statuses) {
     input.classList.toggle('bad', s.checked && !s.correct);
     input.classList.toggle('focus', store.currentBlankFocus === s.order);
   });
+  layoutBlankAnswersSoon();
 }
 
-export function refreshStudyViews({ focusOrder } = {}) {
+export function refreshStudyViews({ focusOrder, caretOffset = null } = {}) {
   const c = store.studyQueue[store.studyIndex];
   if (!c) return;
   syncDraftFromDOM();
   document.getElementById('studyPrompt').innerHTML = formatProblemHtml(c.displayText);
   document.getElementById('studyExplanation').innerHTML = formatStudyExplanationHtml(c, store.currentBlankStatuses);
   paintInlineBlanks(store.currentBlankStatuses);
-  if (focusOrder != null) focusBlankInput(focusOrder);
+  if (focusOrder != null) focusBlankInput(focusOrder, caretOffset);
 }
 
-function focusBlankInput(order) {
-  focusBlankField(document.querySelector(`[data-blank-order="${order}"]`));
+function focusBlankInput(order, caretOffset = null) {
+  focusBlankField(document.querySelector(`[data-blank-order="${order}"]`), { caretOffset });
 }
 
 /** 빈칸 이동 — 입력 보존을 위해 패널을 재생성하지 않고 포커스·하이라이트만 갱신 */
@@ -326,9 +376,9 @@ export function resetBlankGradeIfEdited(order, value) {
   st.revealed = false;
   st.user = value;
   paintInlineBlanks(store.currentBlankStatuses);
-  const wrap = document.getElementById(`blankWrap${order}`);
-  wrap?.querySelector('.blank-answer')?.remove();
-  wrap?.classList.remove('revealing');
+  // 빈칸 바깥의 형제라 지워도 입력 중인 칸의 캐럿에 영향이 없다.
+  document.querySelector(`[data-blank-answer="${order}"]`)?.remove();
+  layoutBlankAnswersSoon();
   return true;
 }
 

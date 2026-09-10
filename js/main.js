@@ -5,7 +5,7 @@ import { setState, store } from './core/store.js';
 import { loadState, persist } from './core/storage.js';
 import { migrateState } from './domain/migrate.js';
 import { parseRoute, navigate, syncUrl } from './core/hash-router.js';
-import { showSection, toggleSidebar, applySidebarState, toggleMobileMenu, closeMobileMenu, handleViewportChange, syncSidebarHeightToMain } from './ui/router.js';
+import { showSection, toggleSidebar, applySidebarState, toggleStudyPrompt, applyStudyPromptState, toggleMobileMenu, closeMobileMenu, handleViewportChange, syncSidebarHeightToMain } from './ui/router.js';
 import { renderAll, renderManageDetail, renderStudyCard, renderCreateForm } from './ui/render.js';
 import { getCard } from './domain/queries.js';
 import { showAuthOverlay, renderAuthUserLists, setAuthTab, showAuthMessage } from './ui/auth.js';
@@ -22,7 +22,7 @@ import { closeModal } from './ui/modal.js';
 import { renderPatchPage } from './ui/patch-notes.js';
 import { initCaretAutoscroll } from './ui/caret-scroll.js';
 import { saveStudySession } from './services/study-session.js';
-import { syncThresholdControls, setGradingThreshold } from './ui/study.js';
+import { syncThresholdControls, setGradingThreshold, layoutBlankAnswersSoon, watchBlankAnswerLayout } from './ui/study.js';
 import {
   blankFieldText,
   normalizeBlankFieldDom,
@@ -101,6 +101,8 @@ async function init() {
 
   syncThresholdControls();
   applySidebarState();
+  applyStudyPromptState();
+  watchBlankAnswerLayout();
 
   const sessionRestored = actions.restoreSession();
 
@@ -133,6 +135,8 @@ async function init() {
 
   window.addEventListener('resize', handleViewportChange);
   window.addEventListener('resize', () => syncSidebarHeightToMain());
+  // 폭이 바뀌면 빈칸의 마지막 줄 위치가 달라져 정답 표시를 다시 앉혀야 한다.
+  window.addEventListener('resize', () => layoutBlankAnswersSoon());
   document.addEventListener('paste', onBlankPaste);
   document.addEventListener('mousedown', onBlankWrapMouseDown);
   document.addEventListener('compositionend', onBlankCompositionEnd);
@@ -279,6 +283,7 @@ function onClick(e) {
 
   const map = {
     'toggle-sidebar': () => toggleSidebar(),
+    'toggle-study-prompt': () => { toggleStudyPrompt(); layoutBlankAnswersSoon(); },
     'toggle-mobile-menu': () => toggleMobileMenu(),
     'close-mobile-menu': () => closeMobileMenu(),
     'nav-manage': () => { showSection('manage'); renderAll(); },
@@ -435,7 +440,7 @@ function onBlankPaste(e) {
 
 function onBlankCompositionEnd(e) {
   if (!e.target?.matches?.('.blank-field')) return;
-  normalizeBlankFieldDom(e.target);
+  normalizeBlankFieldDom(e.target, { dropGradedColors: true });
 }
 
 function onInput(e) {
@@ -451,7 +456,7 @@ function onInput(e) {
   }
   if (e.target.matches('.blank-field')) {
     actions.armBlankPeekSticky(e.target);
-    if (!e.isComposing) normalizeBlankFieldDom(e.target);
+    if (!e.isComposing) normalizeBlankFieldDom(e.target, { dropGradedColors: true });
     else syncBlankRest(e.target);
     const order = Number(e.target.dataset.blankOrder);
     actions.resetBlankGradeIfEdited(order, blankFieldText(e.target));

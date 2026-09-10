@@ -202,6 +202,44 @@ body.mobile-menu-open .mobile-overlay {
   flex: none;
   height: calc(100vh - 350px);
   min-height: 510px;
+  transition: grid-template-columns 0.2s ease;
+}
+
+/* 문제 가리기 — 문제칸을 세로 탭으로 접어 해설에 폭을 몰아준다 */
+body.study-prompt-collapsed .study-layout {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
+.study-panel-tab {
+  display: none;
+}
+
+body.study-prompt-collapsed .study-prompt-panel .study-panel-head,
+body.study-prompt-collapsed .study-prompt-panel .study-panel-body {
+  display: none;
+}
+
+body.study-prompt-collapsed .study-prompt-panel .study-panel-tab {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 14px 0;
+  border: 1px solid #93c5fd;
+  border-radius: 16px;
+  background: #eff6ff;
+  color: var(--blue);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+  cursor: pointer;
+}
+
+body.study-prompt-collapsed .study-prompt-panel .study-panel-tab:hover {
+  background: #dbeafe;
+  border-color: var(--blue);
 }
 
 body.study-playing .stats {
@@ -413,6 +451,19 @@ body.study-playing .study-layout {
 @media (max-width: 1100px) {
   .grid2, .study-layout, .create-split, .manage-split { grid-template-columns: 1fr; }
   .stats { grid-template-columns: repeat(2, 1fr); }
+
+  /* 한 줄로 쌓이는 폭에서는 세로 탭이 화면을 다 먹으므로 가로 막대로 접는다 */
+  body.study-prompt-collapsed .study-layout { grid-template-columns: 1fr; }
+
+  body.study-prompt-collapsed .study-prompt-panel {
+    height: 44px;
+    flex: none;
+  }
+
+  body.study-prompt-collapsed .study-prompt-panel .study-panel-tab {
+    padding: 0 14px;
+    writing-mode: horizontal-tb;
+  }
 }
 
 /* 넓은 화면(탑바 없음) — 카드제작 헤더가 스크롤을 따라감 */

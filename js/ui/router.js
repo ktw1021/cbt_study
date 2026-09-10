@@ -158,6 +158,21 @@ export function toggleSidebar() {
   persist();
 }
 
+/**
+ * 학습 중 문제칸 가리기/펼치기.
+ * 정답을 문제칸에 적어두고 외우다가 시험처럼 풀어보고 싶을 때 카드를 고치지 않고 가린다.
+ */
+export function toggleStudyPrompt() {
+  const collapsed = !document.body.classList.contains('study-prompt-collapsed');
+  store.data.ui.studyPromptCollapsed = collapsed;
+  document.body.classList.toggle('study-prompt-collapsed', collapsed);
+  persist();
+}
+
+export function applyStudyPromptState() {
+  document.body.classList.toggle('study-prompt-collapsed', !!store.data.ui.studyPromptCollapsed);
+}
+
 /** 모바일 — 햄버거 메뉴 */
 export function toggleMobileMenu() {
   if (!isMobileLayout()) return;
