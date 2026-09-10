@@ -1,5 +1,5 @@
-import { uid, shorten, stripBlankMarkers } from '../utils/text.js';
-import { syncTemplateAndBlanks } from './blank.js';
+import { uid, shorten, stripBlankMarkers, normalizeNewlines } from '../utils/text.js';
+import { syncTemplateAndBlanks, migrateBlankAnswer } from './blank.js';
 import { normalizeOutline } from './outline.js';
 
 /** 빈 초기 상태 — 사용자·카드 없음 */
@@ -14,6 +14,7 @@ export function createDefaultState() {
     settings: { gradingThreshold: 80 },
     ui: {
       treeExpanded: {}, section: 'manage', sidebarCollapsed: false,
+      studyPromptCollapsed: false,
       outlineSummaryExpanded: false,
       createSavedSnapshot: '',
       lastAutoSaveAt: '',
@@ -68,10 +69,12 @@ export function migrateCard(raw) {
     }
   }
 
-  const synced = syncTemplateAndBlanks(explanationText, blanks);
+  blanks = blanks.map(migrateBlankAnswer);
+
+  const synced = syncTemplateAndBlanks(normalizeNewlines(explanationText), blanks);
   explanationText = synced.template;
   blanks = synced.blanks;
-  displayText = stripBlankMarkers(displayText);
+  displayText = normalizeNewlines(stripBlankMarkers(displayText));
 
   return {
     id: raw.id || uid('c'),
@@ -114,6 +117,7 @@ export function migrateState(raw) {
     treeExpanded: {},
     section: 'manage',
     sidebarCollapsed: false,
+    studyPromptCollapsed: false,
     outlineSummaryExpanded: false,
     createSavedSnapshot: '',
     lastAutoSaveAt: '',

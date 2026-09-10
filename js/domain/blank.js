@@ -1,12 +1,12 @@
 import { STOPWORDS } from '../config.js';
-import { uid, normalizeTight, splitAnswers } from '../utils/text.js';
+import { uid, normalizeTight, splitAnswers, normalizeNewlines } from '../utils/text.js';
 import { writeTextarea, scrollTextareaToRange } from '../utils/dom.js';
 import { findOutlineBlankCandidates } from './outline.js';
 
 /**
  * 이 빈칸에서 정답으로 인정되는 표현 전부.
  * answer는 해설 본문의 단어(주 정답), aliases는 따로 등록한 동의어.
- * 예전 카드는 answer 자체에 `||`·줄바꿈으로 동의어가 들어 있으므로 함께 쪼갠다.
+ * 예전 카드는 answer에 `||` 로 동의어를 넣었고, 줄바꿈은 한 정답의 문단으로 둔다.
  */
 export function acceptedAnswers(blank) {
   const list = [...splitAnswers(blank?.answer || ''), ...(blank?.aliases || [])];
@@ -17,6 +17,31 @@ export function acceptedAnswers(blank) {
     seen.add(key);
     return true;
   });
+}
+
+/** 1. 2. 가) 처럼 이어지는 목차 줄 */
+const OUTLINE_ANSWER_LINE = /^(?:[0-9]+|[가-힣]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+)\s*[\.)]/;
+
+/**
+ * 예전 카드: 줄바꿈으로 동의어를 넣었으면 aliases 로 옮긴다.
+ * 1. / 2. 처럼 이어지는 문단은 한 정답으로 남긴다.
+ */
+export function migrateBlankAnswer(blank) {
+  const aliases = [...(blank?.aliases || [])];
+  let answer = normalizeNewlines(String(blank?.answer || ''));
+  const byPipe = answer.split(/\s*\|\|\s*/).map((v) => v.trim()).filter(Boolean);
+  if (byPipe.length > 1) {
+    answer = byPipe[0];
+    byPipe.slice(1).forEach((p) => { if (!aliases.includes(p)) aliases.push(p); });
+    return { ...blank, answer, aliases };
+  }
+  const lines = answer.split('\n').map((v) => v.trim()).filter(Boolean);
+  const numbered = lines.filter((ln) => OUTLINE_ANSWER_LINE.test(ln)).length;
+  if (lines.length > 1 && numbered < 2) {
+    answer = lines[0];
+    lines.slice(1).forEach((ln) => { if (!aliases.includes(ln)) aliases.push(ln); });
+  }
+  return { ...blank, answer, aliases };
 }
 
 /** 원문 토큰과 blanks 배열 동기화 — 등장 순서대로 번호 재정렬 */

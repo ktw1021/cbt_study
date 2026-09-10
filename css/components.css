@@ -454,6 +454,15 @@ button.success { background: #dcfce7; color: #166534; }
 button.danger { background: #fee2e2; color: #991b1b; }
 button.warn { background: #ffedd5; color: #9a3412; }
 button.ghost { background: #fff; border: 1px solid var(--line); }
+.study-prompt-panel [data-action="toggle-study-prompt"].ghost {
+  background: #eff6ff;
+  border-color: #93c5fd;
+  color: var(--blue);
+}
+.study-prompt-panel [data-action="toggle-study-prompt"].ghost:hover {
+  background: #dbeafe;
+  border-color: var(--blue);
+}
 button.small { padding: 7px 10px; font-size: 12px; }
 button.folder-add { background: #ecfccb; color: #3f6212; border: 1px solid #d9f99d; font-weight: 700; }
 button.folder-add:hover { background: #d9f99d; }
@@ -1348,6 +1357,7 @@ code { background: #eef2ff; padding: 1px 5px; border-radius: 4px; font-size: 12p
 
 /* 해설 인라인 빈칸 — 입력부 + 남은 ○○○ 마스크 (본문과 함께 줄바꿈) */
 .explanation-body {
+  position: relative;
   white-space: pre-wrap;
   line-height: 2.2;
   font-size: 16px;
@@ -1436,33 +1446,120 @@ code { background: #eef2ff; padding: 1px 5px; border-radius: 4px; font-size: 12p
   -webkit-box-decoration-break: clone;
 }
 
-/* 정답 노출 시 빈칸 아래에 정답을 깔아주기 위한 세로 배치 */
-.blank-wrap.revealing {
-  display: inline;
-  white-space: normal;
+/*
+ * 채점 후 정답 표시 — 빈칸 아래 줄에 깐다.
+ * 정답을 흐름 속 block 으로 두면 빈칸 뒤에 이어지던 본문("…입니다.")까지 다음 줄로 밀린다.
+ * inline-flex 세로 배치는 첫 항목(빈칸)의 baseline 을 바깥에 물려주므로,
+ * 정답은 아래로 내려가면서 본문은 빈칸 오른쪽에 그대로 남는다.
+ */
+/*
+ * 정답이 놓일 자리만 흐름에 남기는 폭 0 자리표시자.
+ * 정답을 흐름 속 block 으로 두면 빈칸 뒤에 이어지던 본문("…입니다.")까지 다음 줄로 밀리고,
+ * 빈칸과 세로 flex 로 묶으면 빈칸이 원자 인라인이 되어 앞 문장과 줄이 끊긴다.
+ * 폭이 0 이라 뒤 본문을 밀지 않고, 빈칸 끝에 붙으므로 여러 줄짜리 빈칸에서도 마지막 줄에 따라붙는다.
+ * in-flow 줄상자가 없는 inline-block 은 아래 모서리가 baseline 이므로,
+ * vertical-align 을 높이만큼 내리면 딱 그만큼만 줄 아래로 자리를 벌린다. 아랫줄과 겹치지 않는다.
+ */
+.blank-answer-holder {
+  display: inline-block;
+  width: 0;
+  height: 28px;
+  vertical-align: -28px;
+  user-select: none;
+  pointer-events: none;
 }
 
-.blank-wrap.revealing .blank-answer {
-  display: block;
-}
-
-/* 채점 후 정답 표시 — 입력칸 바로 아래, 작게, 줄바꿈(가로 스크롤 없음) */
+/*
+ * 배경은 두지 않는다. 빈칸이 색 배경을 쓰고 있어 둘이 같은 것으로 보인다.
+ * 자리표시자가 폭 0 이라 그냥 두면 글자마다 줄이 바뀐다. max-content 로 한 줄을 기본으로 잡고,
+ * layoutBlankAnswers 가 실제 남은 폭에 맞춰 left·max-width 를 다시 잡는다.
+ */
 .blank-answer {
-  display: block;
-  margin-top: 3px;
-  padding: 1px 7px;
-  border-radius: 7px;
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: max-content;
+  max-width: min(30rem, 100%);
   font-size: 12px;
   font-weight: 600;
   line-height: 1.35;
-  white-space: normal;
+  color: var(--green);
   word-break: break-word;
   overflow-wrap: anywhere;
-  max-width: 34rem;
+  pointer-events: none;
+  visibility: hidden;
 }
 
-.blank-answer.wrong { color: var(--red); background: var(--red-soft); }
-.blank-answer.partial { color: var(--green); background: var(--green-soft); }
+.blank-answer.is-placed {
+  visibility: visible;
+}
+
+/* 채점 후 입력칸 안 글자 단위 대조 — 어긋난 글자만 빨강, 맞은 글자는 초록 */
+/* 패널용 --green-soft 는 글자 단위 강조로는 너무 옅어 같은 계열을 진하게 깐다.
+   좌우 패딩을 두면 「제2조」가 「제 2 조」처럼 벌어져 보이므로 세로만 준다. */
+.bd-same,
+.bd-diff,
+.bd-extra,
+.bd-space-extra {
+  padding: 1px 0;
+  border-radius: 2px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.bd-same { color: var(--green); background: rgba(22, 163, 74, 0.16); }
+.bd-diff { color: var(--red); background: rgba(220, 38, 38, 0.16); }
+.bd-extra {
+  color: var(--red);
+  background: rgba(220, 38, 38, 0.16);
+  text-decoration: line-through;
+  text-decoration-thickness: 0.9px;
+}
+.bd-skip { color: inherit; }
+
+/* 첨삭: 띄어쓰기 빠짐 = ∧, 잘못 띈 곳 = 찡긋(호). 글자 폭은 차지하지 않는다. */
+.bd-space-miss {
+  display: inline-block;
+  width: 0;
+  position: relative;
+  overflow: visible;
+  vertical-align: baseline;
+}
+
+.bd-space-miss::before {
+  content: '∧';
+  position: absolute;
+  left: -0.45em;
+  bottom: -0.35em;
+  color: var(--red);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.bd-space-extra {
+  position: relative;
+  color: inherit;
+  background: rgba(220, 38, 38, 0.12);
+}
+
+.bd-space-extra::after {
+  content: '‿';
+  position: absolute;
+  left: 50%;
+  top: -0.7em;
+  transform: translateX(-50%);
+  color: var(--red);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  pointer-events: none;
+}
+
+/* 정답 칸 전체를 초록으로 칠하는 위쪽 :has() 규칙(0,4,0)을 이겨야 빨강이 살아남는다 */
+.blank-wrap:has(.blank-field.ok) .blank-field .bd-diff,
+.blank-wrap:has(.blank-field.ok) .blank-field .bd-extra { color: var(--red); }
 
 /* ── 알파 테스터 관문 (로그인보다 위) ── */
 .alpha-gate-overlay {
