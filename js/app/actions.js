@@ -3,7 +3,7 @@
  */
 import { getState, store } from '../core/store.js';
 import { persist, saveState } from '../core/storage.js';
-import { uid, shuffle, stripBlankMarkers } from '../utils/text.js';
+import { uid, shuffle, stripBlankMarkers, normalizeNewlines } from '../utils/text.js';
 import { migrateCard } from '../domain/migrate.js';
 import {
   getActiveUser,
@@ -81,6 +81,7 @@ import {
   getGradingThreshold,
   showRoundToast,
 } from '../ui/study.js';
+import { caretOffsetIn } from '../ui/blank-input.js';
 import { openChoice } from '../ui/choice-modal.js';
 import { openAutoBlankModal, closeModal, getSelectedAutoTokens } from '../ui/modal.js';
 import { openOutlineModal, handleOutlineModalAction, closeOutlineModal } from '../ui/outline-modal.js';
@@ -554,7 +555,7 @@ export function updateCreateSaveStamp() {
   const autoTs = auto ? new Date(auto).getTime() : 0;
   if (!savedTs && !autoTs) { el.textContent = ''; return; }
   if (autoTs >= savedTs) {
-    el.textContent = `자동저장 ${formatHHMM(auto)}`;
+    el.textContent = `임시저장 ${formatHHMM(auto)}`;
   } else {
     el.textContent = `마지막 저장 ${formatHHMM(saved)}`;
   }
@@ -562,10 +563,15 @@ export function updateCreateSaveStamp() {
 
 async function saveCardWithOptions({ silent = false } = {}) {
   const draft = readCreateForm();
-  if (!draft.displayText.trim()) return alert('문제를 입력하세요.');
-  if (!draft.explanationText.trim()) return alert('해설을 입력하세요.');
+  // silent 호출(목차 적용 등)은 사용자가 누른 저장이 아니므로 검증 경고를 띄우지 않고 조용히 건너뛴다
+  const reject = (msg) => {
+    if (!silent) alert(msg);
+    return false;
+  };
+  if (!draft.displayText.trim()) return reject('문제를 입력하세요.');
+  if (!draft.explanationText.trim()) return reject('해설을 입력하세요.');
   const emptyAnswer = draft.blanks.find((b) => !String(b.answer).trim());
-  if (emptyAnswer) return alert(`빈칸 ${emptyAnswer.order}의 정답이 비어 있습니다. 아래 "빈칸별 정답"을 채우거나 해당 빈칸을 해제하세요.`);
+  if (emptyAnswer) return reject(`빈칸 ${emptyAnswer.order}의 정답이 비어 있습니다. 아래 "빈칸별 정답"을 채우거나 해당 빈칸을 해제하세요.`);
   pushUndo();
   const state = getState();
   const now = new Date().toISOString();
@@ -601,8 +607,13 @@ async function saveCardWithOptions({ silent = false } = {}) {
   showSection('create', { urlExtra: { cardId: store.activeManageId }, replaceUrl: true });
   renderManageDetail(store.activeManageId);
   renderAll();
+  return true;
 }
 
+/**
+ * 5분마다 도는 임시저장 — 카드 본문이 아니라 초안(createDraft)에만 쓴다.
+ * 카드를 확정하는 것은 사용자가 누른 저장뿐이어야, 저장하지 않고 떠나는 선택이 성립한다.
+ */
 export async function autoSaveCreate() {
   if (store.currentSection !== 'create') return false;
   try {
@@ -611,9 +622,9 @@ export async function autoSaveCreate() {
       || d.blanks.length || d.outline?.items?.length
       || (d.title && d.title !== '제목 없음');
     if (!has) return false;
-    await saveCardWithOptions({ silent: true });
+    getState().ui.createDraft = d;
     store.data.ui.lastAutoSaveAt = new Date().toISOString();
-    persist();
+    await persist();
     updateCreateSaveStamp();
     return true;
   } catch {
@@ -684,7 +695,8 @@ export async function selectFiltered(all) {
 // ── 빈칸 ──
 
 export function makeBlankFromSelection(editorId) {
-  chipMakeBlank(editorId);
+  if (chipMakeBlank(editorId)) return;
+  alert('빈칸으로 만들 수 없습니다.\n기존 빈칸을 걸쳐서 선택했거나, 두 글자 이상 선택되지 않았습니다.');
 }
 
 export function removeBlankFromSelection(editorId) {
@@ -1089,8 +1101,15 @@ export async function gradeBlank(order, { onlyIfPending = false, focusAfter = or
     roundedUp = applyCardResult(c, store.currentBlankStatuses);
   }
 
-  // focusAfter: Enter는 같은 칸, 이탈 채점은 이동한 칸(없으면 포커스 복구 안 함)
-  refreshStudyViews(focusAfter != null ? { focusOrder: focusAfter } : {});
+  // focusAfter: Enter는 같은 칸(커서 위치 유지), 이탈 채점은 이동한 칸(없으면 포커스 복구 안 함)
+  let caretOffset = null;
+  if (focusAfter === order) {
+    const field = document.querySelector(`[data-blank-order="${order}"]`);
+    caretOffset = caretOffsetIn(field);
+  }
+  refreshStudyViews(
+    focusAfter != null ? { focusOrder: focusAfter, caretOffset } : {},
+  );
   const ok = store.currentBlankStatuses.filter((s) => s.correct).length;
   const total = c.blanks.length;
   document.getElementById('gradeResult').textContent = correct
@@ -1272,7 +1291,7 @@ export async function saveStudyEdits() {
   pushUndo();
   c.title = document.getElementById('studyEditTitle').value.trim() || c.title;
   c.folderId = document.getElementById('studyEditFolder').value || null;
-  c.displayText = stripBlankMarkers(document.getElementById('studyEditPrompt').value);
+  c.displayText = normalizeNewlines(stripBlankMarkers(document.getElementById('studyEditPrompt').value));
   c.originalText = c.displayText;
   c.explanationText = synced.template;
   c.blanks = synced.blanks.map((b) => ({ ...b, cardId: c.id }));
@@ -1469,7 +1488,7 @@ async function importUsers(kind, data) {
 export function onCreateInput() {
   const { template, blanks } = readChipEditor('explanationTemplate');
   renderCreatePreview({
-    displayText: document.getElementById('promptTemplate').value,
+    displayText: normalizeNewlines(document.getElementById('promptTemplate').value),
     explanationText: template,
     blanks,
   });

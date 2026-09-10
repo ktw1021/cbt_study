@@ -7,7 +7,7 @@
  *   읽을 때 토큰→칩, 저장할 때 칩→토큰으로 변환만 한다(데이터 호환).
  */
 import { syncTemplateAndBlanks } from '../domain/blank.js';
-import { normalizeTight, splitAnswers } from '../utils/text.js';
+import { normalizeTight, normalizeNewlines, splitAnswers } from '../utils/text.js';
 
 /** 동의어는 칩 dataset에 `||`로 이어 담고, 읽을 때 배열로 되돌린다 */
 export const ALIAS_SEP = ' || ';
@@ -79,6 +79,11 @@ function isChip(node) {
   return node && node.nodeType === 1 && node.classList && node.classList.contains(CHIP_CLASS);
 }
 
+/** 선택이 기존 칩을 걸치는가 — 칩을 반쯤 잘라내는 경우만 걸러낸다 */
+function rangeCrossesChip(range, root) {
+  return [...root.querySelectorAll(`.${CHIP_CLASS}`)].some((chip) => range.intersectsNode(chip));
+}
+
 function makeChipEl(answer, aliases = []) {
   const span = document.createElement('span');
   span.className = CHIP_CLASS;
@@ -132,7 +137,7 @@ export function initChipEditor(id) {
   el.addEventListener('paste', (e) => {
     e.preventDefault();
     const text = (e.clipboardData || window.clipboardData).getData('text');
-    insertTextAtCaret(el, text);
+    insertTextAtCaret(el, normalizeNewlines(text));
     el.dispatchEvent(new Event('input', { bubbles: true }));
   });
 
@@ -144,6 +149,7 @@ function insertTextAtCaret(el, text) {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || !el.contains(sel.anchorNode)) {
     el.appendChild(document.createTextNode(text));
+    el.normalize();
     return;
   }
   const range = sel.getRangeAt(0);
@@ -154,6 +160,7 @@ function insertTextAtCaret(el, text) {
   range.collapse(true);
   sel.removeAllRanges();
   sel.addRange(range);
+  el.normalize();
 }
 
 /** 토큰 템플릿 + blanks → 칩 DOM */
@@ -163,7 +170,7 @@ export function setChipEditorContent(id, explanationText, blanks = []) {
   initChipEditor(id);
   el.innerHTML = '';
 
-  const tmpl = String(explanationText || '');
+  const tmpl = normalizeNewlines(explanationText || '');
   const blankMap = new Map((blanks || []).map((b) => [Number(b.order), b]));
   const re = /\[\[BLANK(\d+)\]\]/g;
   let last = 0;
@@ -205,8 +212,12 @@ export function readChipEditor(id) {
   const el = document.getElementById(id);
   if (!el) return { template: '', blanks: [] };
   const picked = [];
-  const template = nodeToTemplate(el, picked);
-  const blanks = picked.map((p, i) => ({ order: i + 1, answer: p.answer, aliases: p.aliases }));
+  const template = normalizeNewlines(nodeToTemplate(el, picked));
+  const blanks = picked.map((p, i) => ({
+    order: i + 1,
+    answer: normalizeNewlines(p.answer),
+    aliases: p.aliases,
+  }));
   return syncTemplateAndBlanks(template, blanks);
 }
 
@@ -231,7 +242,7 @@ export function chipMakeBlank(id) {
     if (node?.nodeType !== 3) return false;
     const full = node.nodeValue || '';
     const pos = range.startOffset;
-    const isWord = (ch) => /[A-Za-z가-힣·\-]/.test(ch || '');
+    const isWord = (ch) => /[A-Za-z0-9가-힣·\-]/.test(ch || '');
     let s = pos;
     let e = pos;
     while (s > 0 && isWord(full[s - 1])) s -= 1;
@@ -243,10 +254,11 @@ export function chipMakeBlank(id) {
     sel.addRange(range);
   }
 
-  // 칩을 가로지르는 선택 방지: 한 텍스트 노드 안의 선택만 허용
-  if (range.commonAncestorContainer.nodeType !== 3) return false;
+  // 빈칸을 해제한 자리는 별도 텍스트 노드로 남아, 그 구간을 다시 묶으면 선택이 여러 노드에 걸친다.
+  // 그래서 "한 텍스트 노드 안"이 아니라 "칩을 걸치지 않을 것"만 조건으로 둔다.
+  if (rangeCrossesChip(range, el)) return false;
 
-  const original = range.toString();
+  const original = normalizeNewlines(range.toString());
   const leadingWs = (original.match(/^\s*/)?.[0]) ?? '';
   const trailingWs = (original.match(/\s*$/)?.[0]) ?? '';
   let text = original.trim();
@@ -279,6 +291,7 @@ export function chipMakeBlank(id) {
   frag.appendChild(chip);
   if (suffixText || trailingWs) frag.appendChild(document.createTextNode(`${suffixText}${trailingWs}`));
   range.insertNode(frag);
+  el.normalize();
 
   const after = document.createRange();
   after.setStartAfter(chip);
@@ -293,9 +306,13 @@ export function chipMakeBlank(id) {
 /** 칩 엘리먼트 제거 → 정답 텍스트로 복구 */
 export function chipRemoveEl(chipEl) {
   if (!isChip(chipEl)) return;
-  const editor = chipEl.closest('[contenteditable]');
+  // 칩에도 contenteditable="false"가 붙어 있어, [contenteditable]로 찾으면 칩 자신이 잡힌다.
+  // 그러면 아래 dispatch가 분리된 노드에서 일어나 미리보기·정답 슬롯이 갱신되지 않는다.
+  const editor = chipEl.closest('[contenteditable="true"]');
   chipEl.replaceWith(document.createTextNode(chipEl.dataset.answer || ''));
-  if (editor) editor.dispatchEvent(new Event('input', { bubbles: true }));
+  if (!editor) return;
+  editor.normalize();
+  editor.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 /** order번째(등장순) 칩 제거 */
@@ -322,6 +339,7 @@ export function chipRemoveAll(id) {
   chips.forEach((chip) => {
     chip.replaceWith(document.createTextNode(chip.dataset.answer || ''));
   });
+  el.normalize();
   el.dispatchEvent(new Event('input', { bubbles: true }));
   return chips.length;
 }
@@ -410,8 +428,15 @@ export function chipApplyTokens(id, tokens) {
 function wrapFirstOccurrence(el, token) {
   const esc = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const re = new RegExp(`(?<![A-Za-z가-힣0-9])(${esc})(?![A-Za-z가-힣0-9])`);
-  const textNodes = [...el.childNodes].filter((n) => n.nodeType === 3);
-  for (const node of textNodes) {
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      return node.parentElement?.closest(`.${CHIP_CLASS}`)
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  let node;
+  while ((node = walker.nextNode())) {
     const match = node.nodeValue.match(re);
     if (!match) continue;
     const idx = match.index;

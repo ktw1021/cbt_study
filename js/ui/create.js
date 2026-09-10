@@ -1,4 +1,4 @@
-import { escapeHtml, stripBlankMarkers, normalizeTight } from '../utils/text.js';
+import { escapeHtml, stripBlankMarkers, normalizeTight, normalizeNewlines } from '../utils/text.js';
 import { syncTemplateAndBlanks } from '../domain/blank.js';
 import { normalizeOutline, extractOutlineBlankToken } from '../domain/outline.js';
 import { formatProblemHtml, formatPromptHtml } from './prompt.js';
@@ -131,7 +131,7 @@ export function renderCreateForm(card) {
   document.getElementById('cardTitle').value = card?.title || '';
   document.getElementById('cardFolder').value = card?.folderId || '';
   syncCardFlagPicker(card?.flagColor ?? 0);
-  document.getElementById('promptTemplate').value = stripBlankMarkers(card?.displayText || '');
+  document.getElementById('promptTemplate').value = normalizeNewlines(stripBlankMarkers(card?.displayText || ''));
   setChipEditorContent('explanationTemplate', card?.explanationText || '', card?.blanks || []);
   document.getElementById('cardMemo').value = card?.memo || '';
   writeOutlineToForm(card?.outline || null);
@@ -189,7 +189,7 @@ export function renderCreatePreview(data) {
 
 /** 폼에서 카드 draft 읽기 (정답·빈칸은 칩 에디터가 단일 출처) */
 export function readCreateForm() {
-  const problem = stripBlankMarkers(document.getElementById('promptTemplate').value);
+  const problem = normalizeNewlines(stripBlankMarkers(document.getElementById('promptTemplate').value));
   const { template, blanks } = readChipEditor('explanationTemplate');
   return {
     id: document.getElementById('cardId').value,

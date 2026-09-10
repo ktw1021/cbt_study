@@ -1,5 +1,4 @@
 import { uid, normalizeTight } from '../utils/text.js';
-import { isAutoBlankExcluded } from './blank.js';
 
 /** 법학 답안 목차 — Ⅰ. → 1. → 가. → 1) → 가) → (1) (동그라미 번호는 제외) */
 const LEVEL_PATTERNS = [
@@ -174,7 +173,6 @@ export function findOutlineBlankCandidates(outline, existingBlanks = []) {
 
   for (const { token, item } of listOutlineTokens(norm)) {
     if (occupied.has(normalizeTight(token))) continue;
-    if (isAutoBlankExcluded(token, token)) continue;
     out.push([token, item.lineIndex]);
   }
 
