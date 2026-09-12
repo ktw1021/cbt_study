@@ -125,6 +125,28 @@ export function toggleOutlineSummary() {
   btn.textContent = expanded ? '접기' : `더보기 (${hidden}개 더)`;
 }
 
+const EXPLANATION_FOCUS_CLASS = 'create-explanation-focus';
+let explanationFocusScrollY = 0;
+
+/** 카드제작 해설 집중 편집 — store에 넣지 않는 일시 UI */
+export function isExplanationFocus() {
+  return document.body.classList.contains(EXPLANATION_FOCUS_CLASS);
+}
+
+export function openExplanationFocus() {
+  if (isExplanationFocus()) return;
+  explanationFocusScrollY = window.scrollY;
+  document.body.classList.add(EXPLANATION_FOCUS_CLASS);
+  const el = document.getElementById('explanationTemplate');
+  if (el && document.activeElement !== el) el.focus();
+}
+
+export function closeExplanationFocus() {
+  if (!isExplanationFocus()) return;
+  document.body.classList.remove(EXPLANATION_FOCUS_CLASS);
+  window.scrollTo(0, explanationFocusScrollY);
+}
+
 /** 카드 제작 폼 렌더 */
 export function renderCreateForm(card) {
   document.getElementById('cardId').value = card?.id || '';

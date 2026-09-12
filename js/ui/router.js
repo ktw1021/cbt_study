@@ -2,7 +2,7 @@ import { store } from '../core/store.js';
 import { persist } from '../core/storage.js';
 import { syncUrl } from '../core/hash-router.js';
 import { renderStudyMeta, renderStudySetup } from './study.js';
-import { readCreateForm, makeCreateSnapshot } from './create.js';
+import { readCreateForm, makeCreateSnapshot, closeExplanationFocus } from './create.js';
 import { closeChoice } from './choice-modal.js';
 import { saveStudySession } from '../services/study-session.js';
 
@@ -86,6 +86,7 @@ export function showSection(name, { urlExtra = {}, replaceUrl = false, fromHash 
     } catch { /* ignore */ }
     if (!shouldLeave) return;
     saveCreateDraftOnLeave();
+    closeExplanationFocus();
   }
   if (prevSection === 'study-play' && name !== 'study-play') saveStudySession();
   closeChoice();

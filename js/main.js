@@ -30,7 +30,7 @@ import {
   focusBlankField,
 } from './ui/blank-input.js';
 import { handleOutlineModalAction, closeOutlineModal, isOutlineModalOpen } from './ui/outline-modal.js';
-import { toggleOutlineSummary } from './ui/create.js';
+import { toggleOutlineSummary, openExplanationFocus, closeExplanationFocus, isExplanationFocus } from './ui/create.js';
 import { actionGuardKey, runGuardedClick } from './utils/action-guard.js';
 
 /** hash → 화면 (뒤로가기) */
@@ -323,6 +323,8 @@ function onClick(e) {
     'outline-unblank': () => actions.removeOutlineBlanks(),
     'open-outline': () => actions.openOutlineManager(),
     'toggle-outline-summary': () => toggleOutlineSummary(),
+    'open-explanation-focus': () => openExplanationFocus(),
+    'close-explanation-focus': () => closeExplanationFocus(),
     'outline-run-preview': () => { handleOutlineModalAction('outline-run-preview'); },
     'outline-adopt-preview': () => { handleOutlineModalAction('outline-adopt-preview'); },
     'outline-item-del': () => { handleOutlineModalAction('outline-item-del', btn); },
@@ -478,6 +480,13 @@ function onKeydown(e) {
   if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     actions.undoAppState();
+    return;
+  }
+
+  if (e.key === 'Escape' && isExplanationFocus()) {
+    if (document.querySelector('#modalRoot .modal-backdrop')) return;
+    e.preventDefault();
+    closeExplanationFocus();
     return;
   }
 

@@ -1328,6 +1328,84 @@ code { background: #eef2ff; padding: 1px 5px; border-radius: 4px; font-size: 12p
 }
 .create-panel-head.explanation { color: #7c3aed; }
 
+.create-explanation-workspace,
+.create-explanation-aside {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.create-explanation-label-row {
+  align-items: center;
+}
+
+.create-explanation-label-row .create-explanation-label {
+  margin: 0;
+}
+
+.create-explanation-focus-open {
+  flex-shrink: 0;
+  background: #ede9fe;
+  color: #6d28d9;
+  border: 1px solid #c4b5fd;
+}
+
+.create-explanation-focus-open:hover {
+  background: #ddd6fe;
+}
+
+.create-explanation-focus-close,
+.create-explanation-focus-save {
+  display: none;
+}
+
+/* 해설 집중 편집 — 기존 #explanationTemplate 를 화면 전체로 키운다 */
+body.create-explanation-focus {
+  overflow: hidden;
+}
+
+body.create-explanation-focus .create-explanation-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  border-radius: 0;
+  border: 0;
+  margin: 0;
+  padding: 14px 16px 16px;
+  background: var(--panel, #fff);
+  box-sizing: border-box;
+}
+
+body.create-explanation-focus .create-explanation-focus-open {
+  display: none;
+}
+
+body.create-explanation-focus .create-explanation-focus-close,
+body.create-explanation-focus .create-explanation-focus-save {
+  display: inline-block;
+}
+
+body.create-explanation-focus .create-explanation-aside,
+body.create-explanation-focus .create-explanation-label-row {
+  display: none;
+}
+
+body.create-explanation-focus .create-explanation-workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+body.create-explanation-focus #explanationTemplate.xl {
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  max-height: none;
+  resize: none;
+}
+
 .explanation-prose {
   line-height: 1.65;
   margin-bottom: 14px;

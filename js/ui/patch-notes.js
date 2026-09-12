@@ -7,6 +7,7 @@
 import { escapeHtml } from '../utils/text.js';
 
 const PATCH_FILES = [
+  'patch-notes-2026-09-12.md',
   'patch-notes-2026-09-10.md',
   'patch-notes-2026-09-04.md',
   'patch-notes-2026-08-15.md',

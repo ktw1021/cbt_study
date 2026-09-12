@@ -180,34 +180,47 @@
           <label class="create-preview-label">미리보기</label>
           <div id="promptPreview" class="preview preview-scroll"></div>
         </div>
-        <div class="create-panel">
-          <div class="create-panel-head explanation">해설</div>
-          <label>해설</label>
-          <div id="explanationTemplate" class="xl create-input chip-editor" contenteditable="true" data-placeholder="해설·요지·암기 문장. 단어 드래그 → Ctrl+B 또는 아래 버튼"></div>
-          <div class="toolbar blank-toolbar">
-            <button class="secondary" type="button" data-action="make-blank" data-editor="explanationTemplate">선택 → 빈칸 (Ctrl+B)</button>
-            <button class="primary" type="button" data-action="quick-auto-blank" data-editor="explanationTemplate" data-limit="5">추천 5개</button>
-            <button class="ghost" type="button" data-action="auto-blank" data-editor="explanationTemplate">빈칸 후보 고르기</button>
-            <button class="warn" type="button" data-action="remove-all-blanks" data-editor="explanationTemplate">빈칸 전체 해제</button>
+        <div class="create-panel create-explanation-panel">
+          <div class="create-panel-head explanation between">
+            <span>해설</span>
+            <div class="toolbar">
+              <button class="ghost small create-explanation-focus-close" type="button" data-action="close-explanation-focus">닫기</button>
+              <button class="primary small create-explanation-focus-save" type="button" data-action="save-card">저장</button>
+            </div>
+          </div>
+          <div class="create-explanation-workspace">
+            <div class="between create-explanation-label-row">
+              <label class="create-explanation-label">해설</label>
+              <button class="small create-explanation-focus-open" type="button" data-action="open-explanation-focus">집중 편집</button>
+            </div>
+            <div id="explanationTemplate" class="xl create-input chip-editor" contenteditable="true" data-placeholder="해설·요지·암기 문장. 단어 드래그 → Ctrl+B 또는 아래 버튼"></div>
+            <div class="toolbar blank-toolbar">
+              <button class="secondary" type="button" data-action="make-blank" data-editor="explanationTemplate">선택 → 빈칸 (Ctrl+B)</button>
+              <button class="primary" type="button" data-action="quick-auto-blank" data-editor="explanationTemplate" data-limit="5">추천 5개</button>
+              <button class="ghost" type="button" data-action="auto-blank" data-editor="explanationTemplate">빈칸 후보 고르기</button>
+              <button class="warn" type="button" data-action="remove-all-blanks" data-editor="explanationTemplate">빈칸 전체 해제</button>
+            </div>
           </div>
           <input type="hidden" id="cardOutlineData" value="" />
-          <div class="outline-panel soft">
-            <div class="between" style="margin-bottom:6px">
-              <label style="margin:0">목차</label>
-              <button class="secondary small" type="button" data-action="open-outline">목차 생성·관리</button>
+          <div class="create-explanation-aside">
+            <div class="outline-panel soft">
+              <div class="between" style="margin-bottom:6px">
+                <label style="margin:0">목차</label>
+                <button class="secondary small" type="button" data-action="open-outline">목차 생성·관리</button>
+              </div>
+              <div id="outlineSummary" class="outline-summary"></div>
             </div>
-            <div id="outlineSummary" class="outline-summary"></div>
-          </div>
-          <p class="caption">자동 빈칸: <strong>저장된 목차</strong> 제목 + 해설 키워드를 후보로 씁니다. 이미 빈칸인 정답은 후보·목차 일괄에서 제외됩니다.</p>
-          <label class="create-preview-label">해설 미리보기</label>
-          <div id="explanationPreview" class="preview preview-scroll soft"></div>
-          <div class="create-panel-foot">
-            <label>빈칸 목록</label>
-            <div id="blankSummary"></div>
-            <label>빈칸별 정답</label>
-            <div id="answerSlots"></div>
-            <label>메모 (선택)</label>
-            <textarea id="cardMemo" class="sm create-memo" placeholder="학습 중 메모"></textarea>
+            <p class="caption">자동 빈칸: <strong>저장된 목차</strong> 제목 + 해설 키워드를 후보로 씁니다. 이미 빈칸인 정답은 후보·목차 일괄에서 제외됩니다.</p>
+            <label class="create-preview-label">해설 미리보기</label>
+            <div id="explanationPreview" class="preview preview-scroll soft"></div>
+            <div class="create-panel-foot">
+              <label>빈칸 목록</label>
+              <div id="blankSummary"></div>
+              <label>빈칸별 정답</label>
+              <div id="answerSlots"></div>
+              <label>메모 (선택)</label>
+              <textarea id="cardMemo" class="sm create-memo" placeholder="학습 중 메모"></textarea>
+            </div>
           </div>
         </div>
       </div>
