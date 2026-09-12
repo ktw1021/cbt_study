@@ -277,31 +277,74 @@ export function renderStudyCard() {
   renderStudyEditForm(c);
 }
 
+const ANSWER_GAP = 11;
+const ANSWER_OVERLAP_PAD = 3;
+
+function answerBoxesOverlap(a, b, pad = ANSWER_OVERLAP_PAD) {
+  return a.left < b.right + pad && b.left < a.right + pad
+    && a.top < b.bottom + pad && b.top < a.bottom + pad;
+}
+
 /**
  * 정답은 폭 0 자리표시자(빈칸 끝)에 들어 있지만, 좌표는 해설 본문 기준이다.
  * 자리표시자 기준으로 왼쪽으로 당기면 overflow-x:hidden 에 잘리거나, 측정 실패 시
  * 빈칸 끝(문장 한가운데)에 남는다. 빈칸 줄상자 중 가장 왼쪽·자리표시자 세로에 앉힌다.
+ * 같은 줄에 오답이 여럿이면 실제 박스가 겹칠 때만 아래 행으로 내린다.
  */
 export function layoutBlankAnswers(root = document) {
+  const groups = new Map();
   root.querySelectorAll('.blank-answer-holder').forEach((holder) => {
     const wrap = holder.previousElementSibling;
     const answer = holder.firstElementChild;
     const host = holder.closest('.explanation-body');
     if (!wrap || !answer || !host) return;
-    const lines = [...wrap.getClientRects()].filter((r) => r.width >= 1 && r.height >= 1);
-    if (!lines.length) return;
-    const leftEdge = Math.min(...lines.map((r) => r.left));
-    const hostRect = host.getBoundingClientRect();
-    answer.style.left = `${leftEdge - hostRect.left}px`;
-    answer.style.maxWidth = `${Math.max(hostRect.right - leftEdge - 8, 80)}px`;
-    const gap = 11;
-    const need = gap + answer.offsetHeight;
-    holder.style.height = `${need}px`;
-    holder.style.verticalAlign = `-${need}px`;
-    const hostRect2 = host.getBoundingClientRect();
-    const holderRect2 = holder.getBoundingClientRect();
-    answer.style.top = `${holderRect2.top - hostRect2.top + gap}px`;
-    answer.classList.add('is-placed');
+    const list = groups.get(host) || [];
+    list.push({ holder, wrap, answer });
+    groups.set(host, list);
+  });
+
+  groups.forEach((items, host) => {
+    const placed = [];
+    items.forEach(({ holder, wrap, answer }) => {
+      const lines = [...wrap.getClientRects()].filter((r) => r.width >= 1 && r.height >= 1);
+      if (!lines.length) return;
+      const leftEdge = Math.min(...lines.map((r) => r.left));
+      const hostRect = host.getBoundingClientRect();
+      const left = leftEdge - hostRect.left;
+      answer.style.left = `${left}px`;
+      answer.style.maxWidth = `${Math.max(hostRect.right - leftEdge - 8, 80)}px`;
+
+      const width = answer.offsetWidth;
+      const height = answer.offsetHeight;
+      const lineH = parseFloat(getComputedStyle(answer).lineHeight) || height;
+      const rowStep = Math.max(Math.round(lineH + 4), 18);
+
+      holder.style.height = `${ANSWER_GAP + height}px`;
+      holder.style.verticalAlign = `-${ANSWER_GAP + height}px`;
+      const hostRect2 = host.getBoundingClientRect();
+      const holderRect2 = holder.getBoundingClientRect();
+      const prefTop = holderRect2.top - hostRect2.top + ANSWER_GAP;
+
+      let row = 0;
+      let top = prefTop;
+      let box = { left, right: left + width, top, bottom: top + height };
+      while (placed.some((p) => answerBoxesOverlap(box, p))) {
+        row += 1;
+        top = prefTop + row * rowStep;
+        box = { left, right: left + width, top, bottom: top + height };
+      }
+
+      const need = ANSWER_GAP + row * rowStep + height;
+      holder.style.height = `${need}px`;
+      holder.style.verticalAlign = `-${need}px`;
+      const hostRect3 = host.getBoundingClientRect();
+      const holderRect3 = holder.getBoundingClientRect();
+      top = holderRect3.top - hostRect3.top + ANSWER_GAP + row * rowStep;
+      box = { left, right: left + width, top, bottom: top + height };
+      answer.style.top = `${top}px`;
+      answer.classList.add('is-placed');
+      placed.push(box);
+    });
   });
 }
 
