@@ -10,6 +10,8 @@ import {
   getUserFolders,
   getUserCards,
   getCard,
+  getOwnedCard,
+  getOwnedFolder,
   getFolder,
   getDescendantFolderIds,
   countCardsInFolder,
@@ -23,7 +25,7 @@ import {
 import { findAutoCandidates, acceptedAnswers } from '../domain/blank.js';
 import { findOutlineBlankCandidates, listOutlineTokens, normalizeOutline } from '../domain/outline.js';
 import { normalizeTight } from '../utils/text.js';
-import { pushUndo, undo, hasUndo } from '../services/undo.js';
+import { pushUndo, undo, hasUndo, clearUndo } from '../services/undo.js';
 import { checkAnswer } from '../services/grading.js';
 import {
   exportData,
@@ -33,6 +35,7 @@ import {
   previewUsersImport,
   applyUsersImport,
   applyFolderImport,
+  usersImportFolderError,
 } from '../services/import-export.js';
 import { saveStudySession, snapshotCurrentCardProgress, getPersistedStudySession, setPersistedStudySession } from '../services/study-session.js';
 import { showSection } from '../ui/router.js';
@@ -109,6 +112,7 @@ async function completeLogin(userId) {
   state.activeUserId = userId;
 
   if (!sameUser) {
+    clearUndo();
     store.activeFolderId = null;
     store.activeManageId = null;
     state.ui.createDraft = null;
@@ -276,6 +280,7 @@ export async function setupUserPin() {
 
 export async function logoutUser() {
   const prevName = getActiveUser()?.name || '';
+  clearUndo();
   store.authenticatedUserId = null;
   getState().activeUserId = null;
   store.activeFolderId = null;
@@ -329,10 +334,11 @@ export async function deleteUser() {
   state.cards = state.cards.filter((c) => c.userId !== u.id);
   state.folders = state.folders.filter((f) => f.userId !== u.id);
   state.users = state.users.filter((x) => x.id !== u.id);
-  state.selectedIds = state.selectedIds.filter((id) => !state.cards.some((c) => c.id === id));
+  state.selectedIds = state.selectedIds.filter((id) => state.cards.some((c) => c.id === id));
 
   store.authenticatedUserId = null;
   state.activeUserId = null;
+  clearUndo();
   await saveState(null, { allowEmptyUsers: true });
 
   if (state.users.length) {
@@ -434,9 +440,10 @@ export async function moveFolder(folderId, newParentId) {
 }
 
 export async function dropCardOnFolder(cardId, folderId) {
-  const card = getCard(cardId);
+  const card = getOwnedCard(cardId);
   if (!card) return;
   const next = folderId || null;
+  if (next && !getOwnedFolder(next)) return;
   if (card.folderId === next) return;
   pushUndo();
   card.folderId = next;
@@ -518,8 +525,9 @@ export function startNewCard() {
 }
 
 export function editCard(id) {
-  const c = getCard(id);
+  const c = getOwnedCard(id);
   if (!c) return;
+  store.activeManageId = id;
   const draft = getState().ui.createDraft;
   renderCreateForm(draft && draft.id === id ? draft : c);
   showSection('create', { urlExtra: { cardId: id } });
@@ -572,13 +580,17 @@ async function saveCardWithOptions({ silent = false } = {}) {
   if (!draft.explanationText.trim()) return reject('해설을 입력하세요.');
   const emptyAnswer = draft.blanks.find((b) => !String(b.answer).trim());
   if (emptyAnswer) return reject(`빈칸 ${emptyAnswer.order}의 정답이 비어 있습니다. 아래 "빈칸별 정답"을 채우거나 해당 빈칸을 해제하세요.`);
+  const existing = getCard(draft.id);
+  if (existing && !getOwnedCard(draft.id)) {
+    return reject('이 계정에서 수정할 수 없는 카드입니다.');
+  }
   pushUndo();
   const state = getState();
   const now = new Date().toISOString();
-  const existing = getCard(draft.id);
 
   if (existing) {
     Object.assign(existing, draft, { userId: getActiveUser().id, updatedAt: now, isSample: false });
+    store.activeManageId = existing.id;
     if (!existing.author) existing.author = getActiveUser().name;
     existing.originalText = draft.displayText;
     existing.blanks = draft.blanks.map((b) => ({ ...b, cardId: existing.id }));
@@ -652,6 +664,7 @@ export async function deleteCurrentCard() {
 
 /** @returns {Promise<boolean>} 실제 삭제 여부 */
 export async function deleteCardById(id) {
+  if (!getOwnedCard(id)) return false;
   if (!confirm('이 카드를 삭제할까요?')) return false;
   pushUndo();
   const state = getState();
@@ -664,10 +677,13 @@ export async function deleteCardById(id) {
 }
 
 export async function moveCardFolder(cardId, folderId) {
-  const c = getCard(cardId);
+  const c = getOwnedCard(cardId);
   if (!c) return;
+  const next = folderId || null;
+  if (next && !getOwnedFolder(next)) return;
+  if (c.folderId === next) return;
   pushUndo();
-  c.folderId = folderId || null;
+  c.folderId = next;
   c.updatedAt = new Date().toISOString();
   await saveState();
   renderAll();
@@ -1052,7 +1068,7 @@ export function startSelectedStudy() {
 }
 
 export function studyOne(id) {
-  const c = getCard(id);
+  const c = getOwnedCard(id);
   if (!c) return;
 
   const sess = getPersistedStudySession();
@@ -1411,7 +1427,7 @@ async function importSharedFolder(data) {
   if (dupes.length) {
     const pick = await openChoice({
       title: desc.title,
-      message: `${desc.message}${renameNote}\n\n이미 가지고 있는 카드 ${dupes.length}장이 있습니다. 제목·해설·빈칸이 같습니다.`,
+      message: `${desc.message}${renameNote}\n\n이미 가지고 있는 카드 ${dupes.length}장이 있습니다. 제목·문제·해설·빈칸(동의어 포함)이 같습니다.`,
       items: dupes.map((c) => c.title || '(제목 없음)'),
       choices: [
         { value: 'skip', label: '중복은 건너뛰기' },
@@ -1448,6 +1464,11 @@ async function importSharedFolder(data) {
 async function importUsers(kind, data) {
   if (!(data.users || []).length) {
     alert('파일에 사용자 정보가 없습니다.');
+    return;
+  }
+  const folderErr = usersImportFolderError(data);
+  if (folderErr) {
+    alert(folderErr);
     return;
   }
 

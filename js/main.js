@@ -7,7 +7,7 @@ import { migrateState } from './domain/migrate.js';
 import { parseRoute, navigate, syncUrl } from './core/hash-router.js';
 import { showSection, toggleSidebar, applySidebarState, toggleStudyPrompt, applyStudyPromptState, toggleMobileMenu, closeMobileMenu, handleViewportChange, syncSidebarHeightToMain } from './ui/router.js';
 import { renderAll, renderManageDetail, renderStudyCard, renderCreateForm } from './ui/render.js';
-import { getCard } from './domain/queries.js';
+import { getOwnedCard } from './domain/queries.js';
 import { showAuthOverlay, renderAuthUserLists, setAuthTab, showAuthMessage } from './ui/auth.js';
 import {
   ensureAlphaAccess,
@@ -53,9 +53,16 @@ function handleHashRoute(fromInit = false) {
     showSection('create', { fromHash: true, urlExtra: { cardId: route.cardId } });
     const draft = store.data.ui.createDraft;
     if (route.cardId) {
-      const c = getCard(route.cardId);
-      if (draft && draft.id === route.cardId) renderCreateForm(draft);
-      else renderCreateForm(c || null);
+      const c = getOwnedCard(route.cardId);
+      if (!c) {
+        syncUrl('create', {}, true);
+        if (draft && !draft.id) renderCreateForm(draft);
+        else renderCreateForm(null);
+      } else {
+        store.activeManageId = c.id;
+        if (draft && draft.id === route.cardId) renderCreateForm(draft);
+        else renderCreateForm(c);
+      }
     } else if (draft && !draft.id) {
       renderCreateForm(draft);
     } else if (!fromInit) {

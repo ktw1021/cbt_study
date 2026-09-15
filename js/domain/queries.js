@@ -40,8 +40,24 @@ export function getCard(id) {
   return getState().cards.find((c) => c.id === id);
 }
 
+/** 지금 로그인한 사용자의 카드만. 없거나 남의 카드면 null */
+export function getOwnedCard(id) {
+  const card = getCard(id);
+  const user = getActiveUser();
+  if (!card || !user || card.userId !== user.id) return null;
+  return card;
+}
+
 export function getFolder(id) {
   return getState().folders.find((f) => f.id === id);
+}
+
+/** 지금 로그인한 사용자의 폴더만. 없거나 남의 폴더면 null */
+export function getOwnedFolder(id) {
+  const folder = getFolder(id);
+  const user = getActiveUser();
+  if (!folder || !user || folder.userId !== user.id) return null;
+  return folder;
 }
 
 /** 폴더 경로 문자열 */

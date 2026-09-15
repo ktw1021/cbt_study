@@ -12,7 +12,7 @@
  */
 import { getState } from '../core/store.js';
 import { migrateCard } from '../domain/migrate.js';
-import { uid } from '../utils/text.js';
+import { uid, normalizeNewlines, splitAnswers } from '../utils/text.js';
 import {
   getActiveUser,
   getUserFolders,
@@ -190,16 +190,25 @@ export function describeImport(kind, data) {
   };
 }
 
-/** 제목 + 해설 + 빈칸이 모두 같으면 같은 카드로 본다 */
+function fingerprintAliases(aliases) {
+  const list = typeof aliases === 'string' ? splitAnswers(aliases) : (aliases || []);
+  return [...list]
+    .map((a) => String(a || '').trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b, 'ko'));
+}
+
+/** 제목·문제·해설·빈칸 정답·동의어가 같으면 같은 카드. aliases는 순서만 달라도 같다. */
 export function cardFingerprint(card) {
   const blanks = (card.blanks || [])
     .slice()
     .sort((a, b) => a.order - b.order)
-    .map((b) => `${b.order}:${String(b.answer || '').trim()}`)
+    .map((b) => `${b.order}:${String(b.answer || '').trim()}:${fingerprintAliases(b.aliases).join('||')}`)
     .join('|');
   return [
     String(card.title || '').trim(),
-    String(card.explanationText || '').trim(),
+    normalizeNewlines(String(card.displayText || '')).trim(),
+    normalizeNewlines(String(card.explanationText || '')).trim(),
     blanks,
   ].join('\u0001');
 }
@@ -253,6 +262,34 @@ export function previewUsersImport(data) {
   };
 }
 
+/** 파일 안 폴더가 서로를 부모로 가리키면 true. 없는 부모는 루트가 되므로 순환이 아님. */
+function incomingFoldersHaveCycle(folders) {
+  const byId = new Map();
+  (folders || []).forEach((f) => {
+    if (f?.id) byId.set(f.id, f);
+  });
+  for (const start of folders || []) {
+    const seen = new Set();
+    let cur = start;
+    while (cur?.id) {
+      if (seen.has(cur.id)) return true;
+      seen.add(cur.id);
+      if (!cur.parentId) break;
+      const parent = byId.get(cur.parentId);
+      if (!parent) break;
+      cur = parent;
+    }
+  }
+  return false;
+}
+
+export function usersImportFolderError(data) {
+  if (incomingFoldersHaveCycle(data?.folders || [])) {
+    return '폴더 구조가 잘못되었습니다. 폴더가 서로를 상위 폴더로 가리키고 있어 가져올 수 없습니다.';
+  }
+  return '';
+}
+
 /**
  * 유저·유저들 가져오기 — 계정·폴더·카드 id를 전부 새로 발급한다.
  * 기존 데이터는 건드리지 않고 옆에 추가한다. 비밀번호는 비운다.
@@ -260,6 +297,8 @@ export function previewUsersImport(data) {
 export function applyUsersImport(data) {
   const srcUsers = data.users || [];
   if (!srcUsers.length) throw new Error('파일에 사용자 정보가 없습니다.');
+  const folderErr = usersImportFolderError(data);
+  if (folderErr) throw new Error(folderErr);
 
   const state = getState();
   const now = new Date().toISOString();

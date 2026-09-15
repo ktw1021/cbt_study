@@ -81,7 +81,6 @@ export function clearStoredAlphaCode() {
   document.cookie = `${COOKIE_KEY}=; Path=/; Max-Age=0; SameSite=Lax`;
 }
 
-/** 저장된 코드(base64)를 풀어 PRODUCT_PLANNER 와 일치하는지 */
 export function isAlphaCodeValid(code, productPlanner) {
   const decoded = decodeBase64Utf8(code);
   if (decoded == null) return false;

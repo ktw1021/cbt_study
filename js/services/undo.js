@@ -19,6 +19,11 @@ export function hasUndo() {
   return undoStack.length > 0;
 }
 
+/** 로그인 전환·로그아웃 때 — 다른 계정 스냅샷이 남지 않게 */
+export function clearUndo() {
+  undoStack.length = 0;
+}
+
 /** 마지막 스냅샷으로 복원 */
 export async function undo() {
   if (!undoStack.length) {
