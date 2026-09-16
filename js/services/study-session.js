@@ -8,12 +8,8 @@ export function getPersistedStudySession() {
   if (!user) return null;
   const ui = getState().ui;
   if (!ui.studySessions) ui.studySessions = {};
-  let sess = ui.studySessions[user.id];
-  if (!sess?.cardIds?.length && ui.studySession?.cardIds?.length) {
-    sess = ui.studySession;
-    ui.studySessions[user.id] = sess;
-    ui.studySession = null;
-  }
+  // Legacy sessions are assigned once by migrateState, before account switching.
+  const sess = ui.studySessions[user.id];
   return sess?.cardIds?.length ? sess : null;
 }
 
@@ -73,4 +69,31 @@ export function loadCardProgress(cardId) {
   store.studyRoundRecorded = !!prog.roundRecorded;
   store.currentBlankFocus = prog.focus ?? null;
   return true;
+}
+
+/** Keep progress attached to blank ids when editing inserts/removes/reorders blanks. */
+export function reconcileEditedCardProgress(cardId, previousBlanks, nextBlanks) {
+  const previous = new Map(previousBlanks.map(b => [b.id, b]));
+  const remap = (statuses) => nextBlanks.map(blank => {
+    const old = previous.get(blank.id);
+    const status = old && statuses.find(s => s.order === old.order);
+    const sameAnswer = old && old.answer === blank.answer
+      && JSON.stringify(old.aliases || []) === JSON.stringify(blank.aliases || []);
+    return status && sameAnswer
+      ? { ...status, order: blank.order }
+      : { order: blank.order, checked: false, correct: false, score: 0, user: '', revealed: false };
+  });
+  const focus = order => {
+    const id = previousBlanks.find(b => b.order === order)?.id;
+    return nextBlanks.find(b => b.id === id)?.order ?? null;
+  };
+  const progress = getPersistedStudySession()?.cardProgress?.[cardId];
+  if (progress) {
+    progress.blankStatuses = remap(progress.blankStatuses || []);
+    progress.focus = focus(progress.focus);
+  }
+  if (store._studyCardId === cardId) {
+    store.currentBlankStatuses = remap(store.currentBlankStatuses || []);
+    store.currentBlankFocus = focus(store.currentBlankFocus);
+  }
 }

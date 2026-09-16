@@ -13,6 +13,7 @@
 import { getState } from '../core/store.js';
 import { migrateCard } from '../domain/migrate.js';
 import { uid, normalizeNewlines, splitAnswers } from '../utils/text.js';
+import { semanticFingerprint } from '../domain/text-marks.js';
 import {
   getActiveUser,
   getUserFolders,
@@ -198,19 +199,9 @@ function fingerprintAliases(aliases) {
     .sort((a, b) => a.localeCompare(b, 'ko'));
 }
 
-/** 제목·문제·해설·빈칸 정답·동의어가 같으면 같은 카드. aliases는 순서만 달라도 같다. */
+/** 제목·문제·해설·빈칸·서식·각주 내용이 같으면 같은 카드. 생성 id 제외. */
 export function cardFingerprint(card) {
-  const blanks = (card.blanks || [])
-    .slice()
-    .sort((a, b) => a.order - b.order)
-    .map((b) => `${b.order}:${String(b.answer || '').trim()}:${fingerprintAliases(b.aliases).join('||')}`)
-    .join('|');
-  return [
-    String(card.title || '').trim(),
-    normalizeNewlines(String(card.displayText || '')).trim(),
-    normalizeNewlines(String(card.explanationText || '')).trim(),
-    blanks,
-  ].join('\u0001');
+  return semanticFingerprint(card);
 }
 
 /** 들어올 카드 중 내가 이미 가진 것 */

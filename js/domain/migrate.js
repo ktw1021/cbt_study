@@ -1,6 +1,7 @@
 import { uid, shorten, stripBlankMarkers, normalizeNewlines } from '../utils/text.js';
 import { syncTemplateAndBlanks, migrateBlankAnswer } from './blank.js';
 import { normalizeOutline } from './outline.js';
+import { normalizeCardTextMeta } from './text-marks.js';
 
 /** 빈 초기 상태 — 사용자·카드 없음 */
 export function createDefaultState() {
@@ -25,6 +26,10 @@ export function createDefaultState() {
       filterFolderId: null,
       studySessions: {},
       studySession: null,
+      studyFontScale: 100,
+      studyNotesTab: 'notes',
+      studyNotesOpen: true,
+      studyNotesField: 'explanation',
     },
   };
 }
@@ -75,6 +80,9 @@ export function migrateCard(raw) {
   explanationText = synced.template;
   blanks = synced.blanks;
   displayText = normalizeNewlines(stripBlankMarkers(displayText));
+  const meta = normalizeCardTextMeta({
+    ...raw, displayText, explanationText, blanks,
+  });
 
   return {
     id: raw.id || uid('c'),
@@ -94,6 +102,8 @@ export function migrateCard(raw) {
     lastResult: raw.lastResult || null,
     isSample: !!raw.isSample,
     outline: normalizeOutline(raw.outline),
+    textMarks: meta.textMarks,
+    footnotes: meta.footnotes,
     createdAt: raw.createdAt || new Date().toISOString(),
     updatedAt: raw.updatedAt || new Date().toISOString(),
   };
@@ -128,6 +138,10 @@ export function migrateState(raw) {
     filterFolderId: null,
     studySessions: {},
     studySession: null,
+    studyFontScale: 100,
+    studyNotesTab: 'notes',
+    studyNotesOpen: true,
+    studyNotesField: 'explanation',
     ...(raw.ui || {}),
   };
   merged.ui.studyConfig = { scope: 'all', order: 'created', folderIds: [], flag: 1, ...(merged.ui.studyConfig || {}) };
@@ -141,13 +155,21 @@ export function migrateState(raw) {
   if (merged.ui.filterFlag == null) merged.ui.filterFlag = 'all';
   if (merged.ui.filterFolderId === undefined) merged.ui.filterFolderId = null;
   if (!merged.ui.studySessions) merged.ui.studySessions = {};
-  if (merged.ui.studySession?.cardIds?.length && merged.activeUserId) {
+  if (merged.ui.studyFontScale == null) merged.ui.studyFontScale = 100;
+  if (!merged.ui.studyNotesTab) merged.ui.studyNotesTab = 'notes';
+  if (merged.ui.studyNotesOpen == null) merged.ui.studyNotesOpen = true;
+  if (merged.ui.studyNotesField !== 'display' && merged.ui.studyNotesField !== 'explanation') {
+    merged.ui.studyNotesField = 'explanation';
+  }
+  const validActive = merged.users.some((u) => u.id === merged.activeUserId);
+  if (merged.ui.studySession?.cardIds?.length && validActive) {
     if (!merged.ui.studySessions[merged.activeUserId]) {
       merged.ui.studySessions[merged.activeUserId] = merged.ui.studySession;
     }
   }
-
-  const validActive = merged.users.some((u) => u.id === merged.activeUserId);
+  // Legacy global progress belongs only to the account active when it was saved.
+  // Leaving it here lets the next account claim the same session again.
+  merged.ui.studySession = null;
   merged.activeUserId = validActive ? merged.activeUserId : null;
 
   return merged;
