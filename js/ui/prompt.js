@@ -2,11 +2,19 @@ import { escapeHtml, splitAnswers, stripBlankMarkers, blankShapeHint, normalizeN
 import { store } from '../core/store.js';
 import { acceptedAnswers } from '../domain/blank.js';
 import { diffAgainstAnswer } from '../services/grading.js';
+import { renderMarkedHtml, renderTemplateHtml } from './mark-render.js';
 
 /** 문제 패널 — 빈칸 토큰 없이 그대로 표시 */
-export function formatProblemHtml(text) {
+export function formatProblemHtml(text, card = null) {
   const plain = normalizeNewlines(stripBlankMarkers(text));
   if (!plain.trim()) return '<span class="empty">문제가 없습니다.</span>';
+  if (card && (card.textMarks || card.footnotes)) {
+    return renderMarkedHtml(plain, {
+      marks: card.textMarks?.display,
+      footnotes: card.footnotes,
+      field: 'display',
+    });
+  }
   return escapeHtml(plain).replace(/\n/g, '<br>');
 }
 
@@ -57,9 +65,11 @@ function renderDiffSegments(segments) {
 /** 해설 패널 — 본문 흐름 속 인라인 빈칸 입력 */
 export function formatExplanationHtml(template, card, statuses = []) {
   const statusMap = new Map(statuses.map((s) => [s.order, s]));
-  const html = escapeHtml(normalizeNewlines(template || '')).replace(/\[\[BLANK(\d+)\]\]/g, (_, n) => {
-    const order = Number(n);
-    return blankInputHtml(order, card, statusMap.get(order) || {});
+  const html = renderTemplateHtml(template, card?.blanks || [], {
+    marks: card?.textMarks?.explanation,
+    footnotes: card?.footnotes,
+    field: 'explanation',
+    renderAtom: (atom) => blankInputHtml(atom.order, card, statusMap.get(atom.order) || {}),
   });
   return html || '<span class="empty">해설을 입력하세요. (카드제작 → 해설)</span>';
 }

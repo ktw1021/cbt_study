@@ -2,9 +2,10 @@ import { store } from '../core/store.js';
 import { persist } from '../core/storage.js';
 import { syncUrl } from '../core/hash-router.js';
 import { renderStudyMeta, renderStudySetup } from './study.js';
-import { readCreateForm, makeCreateSnapshot, closeExplanationFocus } from './create.js';
+import { readCreateForm, isCreateFormDirty, closeExplanationFocus } from './create.js';
 import { closeChoice } from './choice-modal.js';
 import { saveStudySession } from '../services/study-session.js';
+import { placeNotesPanel } from './notes-panel.js';
 
 /** 카드제작 화면을 떠날 때 — 내용이 있으면 초안 보존, 없으면 비움 */
 function saveCreateDraftOnLeave() {
@@ -12,6 +13,7 @@ function saveCreateDraftOnLeave() {
     const d = readCreateForm();
     const has = d.displayText.trim() || d.explanationText.trim() || (d.memo || '').trim()
       || d.blanks.length || d.outline?.items?.length
+      || (d.footnotes || []).length
       || (d.title && d.title !== '제목 없음');
     store.data.ui.createDraft = has ? d : null;
   } catch { /* 폼 미존재 시 무시 */ }
@@ -65,28 +67,25 @@ function applyStudyFocusSidebar(prevSection, nextSection) {
   }
 }
 
+const CREATE_LEAVE_MSG = '저장하지 않은 변경사항이 있을 수 있습니다.\n이동하면 작성 내용이 바뀌거나 사라질 수 있어요.\n그래도 이동할까요?';
+
+export function confirmLeaveCreate({ fromHash = false } = {}) {
+  if (store.currentSection !== 'create') return true;
+  if (fromHash) return true;
+  try {
+    if (isCreateFormDirty() && !window.confirm(CREATE_LEAVE_MSG)) return false;
+  } catch { /* ignore */ }
+  return true;
+}
+
 /** 화면 섹션 전환 + URL 동기화 */
-export function showSection(name, { urlExtra = {}, replaceUrl = false, fromHash = false } = {}) {
+export function showSection(name, { urlExtra = {}, replaceUrl = false, fromHash = false, skipCreateConfirm = false } = {}) {
   const prevSection = store.currentSection;
   if (prevSection === 'create' && name !== 'create') {
-    // 실제 변경이 있을 때만 경고 (마지막 저장/자동저장/진입 시 스냅샷과 비교)
-    let shouldLeave = true;
-    try {
-      const d = readCreateForm();
-      const snap = makeCreateSnapshot(d);
-      const base = String(store.data.ui.createSavedSnapshot || '');
-      const dirty = base
-        ? snap !== base
-        : !!(d.displayText.trim() || d.explanationText.trim() || (d.memo || '').trim()
-          || d.blanks.length || d.outline?.items?.length
-          || (d.title && d.title !== '제목 없음'));
-      if (dirty && !fromHash) {
-        shouldLeave = confirm('저장하지 않은 변경사항이 있을 수 있습니다.\n이동하면 작성 내용이 바뀌거나 사라질 수 있어요.\n그래도 이동할까요?');
-      }
-    } catch { /* ignore */ }
-    if (!shouldLeave) return;
+    if (!skipCreateConfirm && !confirmLeaveCreate({ fromHash })) return false;
     saveCreateDraftOnLeave();
     closeExplanationFocus();
+    if (name !== 'study-play') store._createStudyReturn = null;
   }
   if (prevSection === 'study-play' && name !== 'study-play') saveStudySession();
   closeChoice();
@@ -121,6 +120,9 @@ export function showSection(name, { urlExtra = {}, replaceUrl = false, fromHash 
   }
   persist();
   syncSidebarHeightToMain();
+  if (isCreate) placeNotesPanel('create');
+  else if (name === 'study-play') placeNotesPanel('study');
+  return true;
 }
 
 function syncNavActive(name) {

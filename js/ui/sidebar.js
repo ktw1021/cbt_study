@@ -9,6 +9,7 @@ import {
 import { getPersistedStudySession } from '../services/study-session.js';
 import { renderResumePanel } from './resume-panel.js';
 import { fillFolderSelect } from './folder-select.js';
+import { renderAccountSwitcher } from './account-switcher.js';
 
 /** 필터 UI 상태 반영 (플래그 스와치·폴더 select) */
 export function renderFilterUI() {
@@ -54,12 +55,14 @@ export function renderSidebar() {
   if (guestEl) guestEl.classList.toggle('hidden', !!user);
 
   if (!user) {
+    renderAccountSwitcher();
     return;
   }
 
   if (loggedInEl) {
     document.getElementById('currentUserName').textContent = user.name;
   }
+  renderAccountSwitcher();
 
   renderFilterUI();
 

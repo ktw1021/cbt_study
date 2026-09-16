@@ -15,7 +15,6 @@ import {
   getPendingAlphaPlanner,
   isAlphaGateVisible,
 } from './ui/alpha-gate.js';
-import { formatProblemHtml } from './ui/prompt.js';
 import * as actions from './app/actions.js';
 import { chipRemoveEl, chipSetAliases } from './ui/chip-editor.js';
 import { closeModal } from './ui/modal.js';
@@ -23,6 +22,7 @@ import { renderPatchPage } from './ui/patch-notes.js';
 import { initCaretAutoscroll } from './ui/caret-scroll.js';
 import { saveStudySession } from './services/study-session.js';
 import { syncThresholdControls, setGradingThreshold, layoutBlankAnswersSoon, watchBlankAnswerLayout } from './ui/study.js';
+import { bindStudyBlankNav, isStudyBlankNavOpen, closeStudyBlankNav } from './ui/study-blank-nav.js';
 import {
   blankFieldText,
   normalizeBlankFieldDom,
@@ -31,7 +31,11 @@ import {
 } from './ui/blank-input.js';
 import { handleOutlineModalAction, closeOutlineModal, isOutlineModalOpen } from './ui/outline-modal.js';
 import { toggleOutlineSummary, openExplanationFocus, closeExplanationFocus, isExplanationFocus } from './ui/create.js';
+import { bindFootnoteFeedback } from './ui/footnote-feedback.js';
 import { actionGuardKey, runGuardedClick } from './utils/action-guard.js';
+import { focusManageCard, focusManageRange, toggleManageFocus } from './ui/manage-selection.js';
+import { bindFormatChrome } from './ui/editor-surface.js';
+import { bindAccountSwitcher } from './ui/account-switcher.js';
 
 /** hash → 화면 (뒤로가기) */
 function handleHashRoute(fromInit = false) {
@@ -109,6 +113,7 @@ async function init() {
   syncThresholdControls();
   applySidebarState();
   applyStudyPromptState();
+  actions.applyStudyFontScale();
   watchBlankAnswerLayout();
 
   const sessionRestored = actions.restoreSession();
@@ -162,6 +167,32 @@ function bindEvents() {
   document.addEventListener('mouseout', actions.handleBlankPeekOut);
   document.addEventListener('mousemove', actions.handleBlankPeekMove);
   initCaretAutoscroll();
+  bindStudyBlankNav();
+  bindFormatChrome();
+  bindFootnoteFeedback();
+  bindAccountSwitcher();
+
+  const cardList = document.getElementById('cardList');
+
+  cardList.addEventListener('click', (e) => {
+    const item = e.target.closest('[data-drag-card]');
+    if (!item) return;
+    const id = item.dataset.dragCard || item.dataset.id;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.shiftKey) {
+      focusManageRange(id);
+      renderManageDetail(id);
+      return;
+    }
+    if (e.ctrlKey) {
+      toggleManageFocus(id);
+      renderManageDetail(id);
+      return;
+    }
+    focusManageCard(id);
+    renderManageDetail(id);
+  }, true);
 
   const folderTree = document.getElementById('folderTree');
   const folderPanel = document.getElementById('folderPanel');
@@ -284,6 +315,12 @@ function onClick(e) {
     return;
   }
 
+  const fnBtn = e.target.closest('.tm-fn');
+  if (fnBtn && !fnBtn.closest('[data-action]')) {
+    actions.openFootnoteFromMarker(fnBtn);
+    return;
+  }
+
   const btn = e.target.closest('[data-action]');
   if (!btn) return;
   const action = btn.dataset.action;
@@ -310,6 +347,10 @@ function onClick(e) {
       submitAlphaGateCode(getPendingAlphaPlanner());
     },
     'logout': () => runAuthAction(actions.logoutUser),
+    'toggle-account-switcher': () => actions.toggleAccountSwitcher(),
+    'pick-account-switch': () => actions.pickAccountSwitch(btn.dataset.userId),
+    'confirm-account-switch': () => runAuthAction(actions.confirmAccountSwitch),
+    'cancel-account-switch': () => actions.cancelAccountSwitch(),
     'rename-user': () => actions.renameUser(),
     'delete-user': () => actions.deleteUser(),
     'select-all': () => actions.selectFiltered(true),
@@ -317,8 +358,23 @@ function onClick(e) {
     'new-card': () => actions.startNewCard(),
     'pick-flag': () => actions.pickCardFlag(Number(btn.dataset.flag)),
     'save-card': () => actions.saveCard(),
+    'create-study-nav': () => actions.goStudyFromCreate(),
     'delete-card-form': () => actions.deleteCurrentCard(),
+    'fmt-bold': () => actions.onFormatToolbar('fmt-bold', btn.dataset.editor),
+    'fmt-hl': () => actions.onFormatToolbar('fmt-hl', btn.dataset.editor),
+    'fmt-color': () => actions.onFormatToolbar('fmt-color', btn.dataset.editor, { color: btn.dataset.color }),
+    'fmt-align': () => actions.onFormatToolbar('fmt-align', btn.dataset.editor, { align: btn.dataset.align }),
+    'fmt-clear': () => actions.onFormatToolbar('fmt-clear', btn.dataset.editor),
+    'fmt-footnote': () => actions.onFormatToolbar('fmt-footnote', btn.dataset.editor),
     'make-blank': () => actions.makeBlankFromSelection(btn.dataset.editor),
+    'study-notes-tab': () => actions.setStudyNotesTab(btn.dataset.tab),
+    'notes-field-tab': () => actions.setNotesField(btn.dataset.field),
+    'toggle-study-notes': () => actions.toggleStudyNotesPanel(),
+    'toggle-study-fn': () => actions.toggleStudyFootnote(btn.dataset.fnId),
+    'jump-note-fn': () => actions.jumpToNoteFootnote(btn.dataset.fnId, btn.dataset.fnField),
+    'toggle-all-notes-fn': () => actions.toggleAllNotesFootnotes(),
+    'save-note-fn': () => actions.saveNoteFootnote(btn.dataset.fnId, btn.dataset.fnField),
+    'delete-note-fn': () => actions.deleteNoteFootnote(btn.dataset.fnId, btn.dataset.fnField),
     'remove-blank': () => actions.removeBlankFromSelection(btn.dataset.editor),
     'remove-blank-order': () => actions.removeBlankByOrder(btn.dataset.editor, Number(btn.dataset.order)),
     'jump-blank': () => actions.jumpToBlank(btn.dataset.editor, Number(btn.dataset.order)),
@@ -350,7 +406,6 @@ function onClick(e) {
     'grade': () => actions.gradeCurrent(),
     'hide-answers': () => actions.hideAnswers(),
     'save-memo': () => actions.saveStudyMemo(),
-    'save-study-edit': () => actions.saveStudyEdits(),
     'round-minus': () => actions.adjustRounds(-1),
     'round-plus': () => actions.adjustRounds(1),
     'prev-card': () => actions.prevCard(),
@@ -361,7 +416,12 @@ function onClick(e) {
     'create-folder': () => actions.createFolder(btn.dataset.parent || null),
     'rename-folder': () => actions.renameFolder(btn.dataset.id),
     'delete-folder': () => actions.deleteFolder(btn.dataset.id),
-    'select-card': () => renderManageDetail(btn.dataset.id),
+    'select-card': () => {
+      const id = btn.dataset.id;
+      focusManageCard(id);
+      renderManageDetail(id);
+    },
+    'blank-nav-trigger': () => actions.clickStudyBlankNavTrigger(),
     'edit-card': () => actions.editCard(btn.dataset.id),
     'study-one': () => actions.studyOne(btn.dataset.id),
     'delete-card': () => actions.deleteCardById(btn.dataset.id),
@@ -397,7 +457,7 @@ function onChange(e) {
     actions.toggleStudySetupCard(e.target.dataset.id, e.target.checked);
   }
   if (e.target.dataset.action === 'move-card-folder') actions.moveCardFolder(e.target.dataset.cardId, e.target.value);
-  if (['searchInput', 'wrongFilter'].includes(e.target.id)) renderAll();
+  if (e.target.id === 'wrongFilter') renderAll();
   if (e.target.id === 'filterFolderSelect') actions.onFilterFolderChange();
   if (['studyScope', 'studyOrder'].includes(e.target.id)) actions.onStudyConfigChange();
   if (e.target.id === 'gradingThreshold' || e.target.id === 'gradingThresholdPlay') {
@@ -453,12 +513,18 @@ function onBlankCompositionEnd(e) {
 }
 
 function onInput(e) {
-  if (e.target.id === 'promptTemplate') {
-    document.getElementById('promptPreview').innerHTML = formatProblemHtml(e.target.value);
+  if (e.target.closest?.('#promptTemplate') || e.target.closest?.('#explanationTemplate')) {
+    actions.onCreateInput();
     return;
   }
-  if (e.target.id === 'explanationTemplate') { actions.onCreateInput(); return; }
-  if (e.target.id === 'studyEditExplanation') { actions.onStudyEditInput(); return; }
+  if (e.target.id === 'notesMemo' && document.getElementById('notesPanel')?.dataset?.notesHost === 'create') {
+    actions.onCreateInput();
+    return;
+  }
+  if (e.target.id === 'studyFontScale') {
+    actions.onStudyFontScale(e.target.value);
+    return;
+  }
   if (e.target.matches('input[data-alias-for]')) {
     chipSetAliases(e.target.dataset.editor, Number(e.target.dataset.aliasFor), e.target.value);
     return;
@@ -484,9 +550,17 @@ function onKeydown(e) {
   const active = document.activeElement;
   const isBlankField = active?.matches?.('[data-blank-order]');
 
+  if (actions.handleEditorShortcut(e)) return;
+
   if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'z') {
     e.preventDefault();
     actions.undoAppState();
+    return;
+  }
+
+  if (e.key === 'Escape' && isStudyBlankNavOpen()) {
+    e.preventDefault();
+    closeStudyBlankNav({ restoreFocus: true });
     return;
   }
 
@@ -506,10 +580,15 @@ function onKeydown(e) {
     return;
   }
 
-  if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'b') {
-    if (active?.classList?.contains('chip-editor')) {
+  if (e.ctrlKey && !e.altKey && !e.shiftKey && (e.code === 'KeyB' || e.key.toLowerCase() === 'b')) {
+    if (active?.id === 'explanationTemplate') {
       e.preventDefault();
       actions.makeBlankFromSelection(active.id);
+      return;
+    }
+    if (active?.id === 'promptTemplate') {
+      e.preventDefault();
+      actions.onFormatToolbar('fmt-bold', active.id);
       return;
     }
   }
@@ -525,6 +604,12 @@ function onKeydown(e) {
   if (isBlankField && e.key === 'Enter') {
     e.preventDefault();
     actions.gradeBlank(Number(active.dataset.blankOrder));
+    return;
+  }
+
+  if (active?.id === 'accountSwitchPin' && e.key === 'Enter' && !e.isComposing) {
+    e.preventDefault();
+    runAuthAction(actions.confirmAccountSwitch);
     return;
   }
 

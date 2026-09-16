@@ -49,7 +49,22 @@
     <div class="panel">
       <h3>사용자</h3>
       <div id="loggedInUser" class="hidden">
-        <div class="user-badge"><strong id="currentUserName"></strong></div>
+        <button type="button" class="user-badge" id="accountSwitcherToggle" data-action="toggle-account-switcher" title="계정 전환" aria-expanded="false" aria-controls="accountSwitcher">
+          <strong id="currentUserName"></strong>
+          <span class="user-badge-caret" aria-hidden="true">▾</span>
+        </button>
+        <div id="accountSwitcher" class="account-switcher hidden">
+          <div id="accountSwitcherList" class="account-switcher-list"></div>
+          <div id="accountSwitcherPin" class="account-switcher-pin hidden">
+            <label id="accountSwitcherPinLabel" for="accountSwitchPin">4자리 비밀번호</label>
+            <input id="accountSwitchPin" type="password" inputmode="numeric" maxlength="4" autocomplete="current-password" placeholder="숫자 4자리" />
+            <div class="row" style="margin-top:8px">
+              <button type="button" class="primary small" data-action="confirm-account-switch">로그인</button>
+              <button type="button" class="ghost small" data-action="cancel-account-switch">취소</button>
+            </div>
+          </div>
+          <div id="accountSwitcherError" class="auth-feedback auth-feedback-error hidden" role="alert"></div>
+        </div>
         <div id="userSummary" class="caption" style="margin-top:6px"></div>
         <div class="row" style="margin-top:8px">
           <button class="small ghost" data-action="rename-user">이름 변경</button>
@@ -119,7 +134,7 @@
 
     <section id="manageSection" class="panel">
       <div class="between">
-        <div><h2>카드관리</h2><div class="muted">폴더 드래그 이동 · 카드는 폴더에 넣기 · 폴더 패널 빈 곳에 놓으면 미분류</div></div>
+        <div><h2>카드관리</h2><div class="muted">폴더 드래그 이동 · Shift+클릭 범위 · Ctrl+클릭 추가/해제, 포커스된 카드 아무거나 폴더에 놓기 · 빈 곳은 미분류</div></div>
         <button class="primary" data-action="new-card">새 카드 제작</button>
       </div>
       <div class="manage-split">
@@ -148,6 +163,7 @@
       <div class="between create-head">
         <div><h2>카드제작</h2></div>
         <div class="toolbar">
+          <button type="button" class="ghost small create-study-nav--go" id="createStudyNavBtn" data-action="create-study-nav">학습하러 가기</button>
           <span id="createSaveStamp" class="caption"></span>
           <button class="ghost" data-action="new-card">새 카드</button>
           <button class="primary" data-action="save-card">저장</button>
@@ -155,6 +171,7 @@
         </div>
       </div>
       <input type="hidden" id="cardId" />
+      <input type="hidden" id="cardMemo" />
       <div class="create-meta-row">
         <div class="create-meta-title"><label>제목</label><input id="cardTitle" type="text" placeholder="카드 제목" /></div>
         <div class="create-meta-folder"><label>폴더</label><select id="cardFolder" class="folder-select"></select></div>
@@ -176,7 +193,7 @@
         <div class="create-panel">
           <div class="create-panel-head">문제</div>
           <label>문제 (케이스·질문·지문)</label>
-          <textarea id="promptTemplate" class="xl create-input" placeholder="여기는 문제만. 빈칸 없음."></textarea>
+          <div id="promptTemplate" class="xl create-input chip-editor" contenteditable="true" data-placeholder="여기는 문제만. 빈칸 없음."></div>
           <label class="create-preview-label">미리보기</label>
           <div id="promptPreview" class="preview preview-scroll"></div>
         </div>
@@ -218,11 +235,10 @@
               <div id="blankSummary"></div>
               <label>빈칸별 정답</label>
               <div id="answerSlots"></div>
-              <label>메모 (선택)</label>
-              <textarea id="cardMemo" class="sm create-memo" placeholder="학습 중 메모"></textarea>
             </div>
           </div>
         </div>
+        <div id="createNotesMount" class="create-notes-mount"></div>
       </div>
     </section>
 
@@ -270,6 +286,13 @@
         <button class="ghost small" data-action="round-minus">회독 -1</button>
         <button class="ghost small" data-action="round-plus">회독 +1</button>
         <div class="study-play-threshold setup-field">
+          <label>본문 크기</label>
+          <div class="setup-threshold">
+            <input id="studyFontScale" type="range" min="80" max="160" step="5" value="100" />
+            <span id="studyFontScaleLabel" class="pill">100%</span>
+          </div>
+        </div>
+        <div class="study-play-threshold setup-field">
           <label>유사도</label>
           <div class="setup-threshold">
             <input id="gradingThresholdPlay" type="range" min="50" max="100" step="5" />
@@ -308,53 +331,45 @@
               </div>
             </div>
           </div>
+          <div id="studyNotesMount" class="study-notes-mount">
+            <aside id="notesPanel" class="study-panel study-notes-panel" data-notes-host="study">
+              <button type="button" class="study-panel-tab" data-action="toggle-study-notes" title="각주·메모 펼치기" aria-label="각주·메모 펼치기">각주 펼치기</button>
+              <div class="study-panel-head between notes-panel-head">
+                <h3>각주·메모</h3>
+                <button type="button" class="ghost small notes-collapse-btn" data-action="toggle-study-notes" title="각주·메모 접기" aria-label="각주·메모 접기">접기</button>
+                <div class="notes-field-tabs" role="tablist" aria-label="문제·해설">
+                  <button type="button" class="ghost small" data-action="notes-field-tab" data-field="display" role="tab" aria-selected="false">문제</button>
+                  <button type="button" class="ghost small active" data-action="notes-field-tab" data-field="explanation" role="tab" aria-selected="true">해설</button>
+                </div>
+              </div>
+              <div class="study-notes-tabs" role="tablist" aria-label="각주·메모">
+                <button type="button" class="ghost small active" data-action="study-notes-tab" data-tab="notes" role="tab" aria-selected="true">각주</button>
+                <button type="button" class="ghost small" data-action="study-notes-tab" data-tab="memo" role="tab" aria-selected="false">메모</button>
+              </div>
+              <div class="study-panel-body">
+                <div id="notesBody">
+                  <div id="notesList" class="study-notes-list caption">각주 없음</div>
+                </div>
+                <div id="notesMemoWrap" hidden>
+                  <label>카드 메모</label>
+                  <textarea id="notesMemo" class="sm" placeholder="카드 전체 메모"></textarea>
+                  <button class="ghost small" data-action="save-memo">메모 저장</button>
+                </div>
+              </div>
+            </aside>
+          </div>
         </div>
 
         <div class="study-dock">
           <div id="gradeResult" class="result-box">빈칸 입력 후 Enter로 채점</div>
           <div class="study-dock-row">
-            <div class="study-dock-memo">
-              <label>메모</label>
-              <textarea id="studyMemo" class="sm"></textarea>
-            </div>
             <div class="toolbar study-dock-actions">
-              <button class="ghost small" data-action="save-memo">메모 저장</button>
               <button class="primary" data-action="grade">전체 채점</button>
               <button class="ghost" data-action="hide-answers">다시 풀기</button>
             </div>
           </div>
         </div>
       </div>
-
-      <details id="studyEditPanel" class="panel soft" style="margin-top:12px">
-        <summary style="cursor:pointer;font-weight:700">학습 중 카드 수정 (원본에 즉시 저장)</summary>
-        <div class="grid2" style="margin-top:12px">
-          <div class="col">
-            <div class="row">
-              <div style="flex:2"><label>제목</label><input id="studyEditTitle" type="text" /></div>
-              <div style="flex:2"><label>폴더</label><select id="studyEditFolder" class="folder-select"></select></div>
-            </div>
-            <label>문제</label>
-            <textarea id="studyEditPrompt" class="xl"></textarea>
-            <label>메모</label>
-            <textarea id="studyEditMemo" class="sm"></textarea>
-          </div>
-          <div class="col">
-            <label>해설 (Ctrl+B 빈칸)</label>
-            <div id="studyEditExplanation" class="xl chip-editor" contenteditable="true" data-placeholder="해설·암기 문장. 단어 드래그 → Ctrl+B"></div>
-            <div class="toolbar blank-toolbar">
-              <button class="secondary small" data-action="make-blank" data-editor="studyEditExplanation">선택 → 빈칸</button>
-              <button class="primary small" data-action="quick-auto-blank" data-editor="studyEditExplanation" data-limit="5">추천 5개</button>
-              <button class="ghost small" data-action="auto-blank" data-editor="studyEditExplanation">빈칸 후보 고르기</button>
-            </div>
-            <label>해설 미리보기</label>
-            <div id="studyEditExplanationPreview" class="preview preview-scroll"></div>
-            <label>빈칸 정답</label>
-            <div id="studyEditSlots"></div>
-            <button class="primary" data-action="save-study-edit">수정 저장</button>
-          </div>
-        </div>
-      </details>
     </section>
 
     <section id="patchSection" class="panel hidden">

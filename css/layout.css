@@ -45,6 +45,29 @@ body.sidebar-collapsed .sidebar-wrap {
   background: #f9fbff;
   width: 300px;
 }
+.sidebar-wrap,
+.sidebar {
+  scrollbar-width: auto;
+  scrollbar-color: #64748b #e2e8f0;
+}
+.sidebar-wrap::-webkit-scrollbar,
+.sidebar::-webkit-scrollbar {
+  width: 14px;
+}
+.sidebar-wrap::-webkit-scrollbar-track,
+.sidebar::-webkit-scrollbar-track {
+  background: #e2e8f0;
+}
+.sidebar-wrap::-webkit-scrollbar-thumb,
+.sidebar::-webkit-scrollbar-thumb {
+  background: #64748b;
+  border-radius: 8px;
+  min-height: 32px;
+}
+.sidebar-wrap::-webkit-scrollbar-thumb:hover,
+.sidebar::-webkit-scrollbar-thumb:hover {
+  background: #475569;
+}
 
 body.sidebar-collapsed .sidebar {
   transform: translateX(-100%);
@@ -196,18 +219,36 @@ body.mobile-menu-open .mobile-overlay {
 /* 뷰포트 기준 높이 — 내용만큼 페이지 늘어나지 않고, 칸 안에서만 스크롤 */
 .study-layout {
   display: grid;
-  grid-template-columns: minmax(0, 4.5fr) minmax(0, 5.5fr);
+  grid-template-columns: minmax(0, 4fr) minmax(0, 5fr) 240px;
+  grid-template-rows: minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
   flex: none;
   height: calc(100vh - 350px);
   min-height: 510px;
+  overflow: hidden;
   transition: grid-template-columns 0.2s ease;
 }
+.study-layout > * {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
 
-/* 문제 가리기 — 문제칸을 세로 탭으로 접어 해설에 폭을 몰아준다 */
+/* 문제 가리기 — 문제칸을 세로 탭으로 접어 해설에 폭을 몰아준다. 각주 폭은 유지 */
 body.study-prompt-collapsed .study-layout {
-  grid-template-columns: 44px minmax(0, 1fr);
+  grid-template-columns: 44px minmax(0, 1fr) 240px;
+}
+body.study-notes-collapsed .study-layout {
+  grid-template-columns: minmax(0, 4.5fr) minmax(0, 5.5fr) 44px;
+}
+body.study-notes-collapsed.study-prompt-collapsed .study-layout {
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+}
+body.study-notes-collapsed .study-notes-panel[data-notes-host="study"] .study-panel-body,
+body.study-notes-collapsed .study-notes-panel[data-notes-host="study"] .study-notes-tabs,
+body.study-notes-collapsed .study-notes-panel[data-notes-host="study"] .study-panel-head {
+  display: none;
 }
 
 .study-panel-tab {
@@ -242,6 +283,24 @@ body.study-prompt-collapsed .study-prompt-panel .study-panel-tab:hover {
   border-color: var(--blue);
 }
 
+body.study-notes-collapsed .study-notes-panel[data-notes-host="study"] .study-panel-tab {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 14px 0;
+  border: 1px solid #c4b5fd;
+  border-radius: 16px;
+  background: #f5f3ff;
+  color: #6d28d9;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+  cursor: pointer;
+}
+
 body.study-playing .stats {
   display: none;
 }
@@ -251,9 +310,8 @@ body.study-playing .stats {
 body.study-playing #studyPlayBar { display: flex; margin-bottom: 10px; }
 body.study-playing #studySetup { display: none; }
 
-/* setup 화면(학습 중이 아닐 때)에선 작업영역·수정 패널 숨김 — :not()으로 특이성 충돌 방지 */
-body:not(.study-playing) #studySection .study-workspace,
-body:not(.study-playing) #studySection #studyEditPanel { display: none; }
+/* setup 화면(학습 중이 아닐 때)에선 작업영역 숨김 — :not()으로 특이성 충돌 방지 */
+body:not(.study-playing) #studySection .study-workspace { display: none; }
 
 body.study-playing .study-layout {
   height: calc(100vh - 200px);
@@ -291,30 +349,86 @@ body.study-playing .study-layout {
   align-items: center;
   gap: 10px;
 }
+.study-notes-panel .study-panel-head.between,
+.study-notes-panel .notes-panel-head {
+  flex-wrap: wrap;
+}
 
 .study-panel-head h3 {
   margin: 0;
   flex-shrink: 0;
 }
 
-/* 해설 헤더 — 빈칸 1~N 한 줄, 가로 스크롤 */
+/* 해설 헤더 — 빈칸 목록 드롭다운 */
 .study-panel-head .study-navigator.toolbar {
   display: flex;
   flex: 1;
   min-width: 0;
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  overflow-y: hidden;
-  justify-content: flex-start;
-  gap: 6px;
-  padding-bottom: 4px;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
+  justify-content: flex-end;
 }
 
-.study-panel-head .study-navigator .small {
-  flex: 0 0 auto;
-  white-space: nowrap;
+.study-blank-nav {
+  position: relative;
+  max-width: 100%;
+}
+
+.study-blank-nav-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.study-blank-nav-summary {
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+.study-blank-nav-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  display: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 9rem;
+  max-height: min(50vh, 280px);
+  overflow-y: auto;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+}
+
+.study-blank-nav.is-open .study-blank-nav-panel {
+  display: flex;
+}
+
+.study-blank-nav-panel[hidden] {
+  display: none !important;
+}
+
+.study-blank-nav-panel .study-blank-nav-item {
+  justify-content: flex-start;
+  text-align: left;
+}
+
+.study-blank-nav-item.is-current {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
+
+.study-blank-nav-item.ok {
+  border-color: #16a34a;
+  color: #15803d;
+}
+
+.study-blank-nav-item.bad {
+  border-color: #dc2626;
+  color: #b91c1c;
 }
 
 .study-panel-body {
@@ -450,6 +564,24 @@ body.study-playing .study-layout {
 
 @media (max-width: 1100px) {
   .grid2, .study-layout, .create-split, .manage-split { grid-template-columns: 1fr; }
+  .study-layout,
+  body.study-playing .study-layout {
+    height: auto;
+    min-height: 0;
+    grid-template-rows: none;
+  }
+  .study-layout > .study-panel {
+    height: clamp(240px, 50vh, 480px);
+  }
+  body.study-notes-collapsed .study-layout,
+  body.study-prompt-collapsed .study-layout,
+  body.study-notes-collapsed.study-prompt-collapsed .study-layout {
+    grid-template-columns: 1fr;
+  }
+  .study-notes-panel {
+    max-height: 28vh;
+    min-height: 0;
+  }
   .stats { grid-template-columns: repeat(2, 1fr); }
 
   /* 한 줄로 쌓이는 폭에서는 세로 탭이 화면을 다 먹으므로 가로 막대로 접는다 */
@@ -464,6 +596,19 @@ body.study-playing .study-layout {
     padding: 0 14px;
     writing-mode: horizontal-tb;
   }
+
+  body.study-notes-collapsed .study-notes-panel[data-notes-host="study"] {
+    height: 44px;
+    flex: none;
+    max-height: 44px;
+  }
+
+  body.study-notes-collapsed .study-notes-panel[data-notes-host="study"] .study-panel-tab {
+    padding: 0 14px;
+    writing-mode: horizontal-tb;
+  }
+
+  /* 좁은 집중편집 오버라이드는 css/components.css 가 동일 선택기로 이긴다. */
 }
 
 /* 넓은 화면(탑바 없음) — 카드제작 헤더가 스크롤을 따라감 */

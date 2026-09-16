@@ -21,5 +21,4 @@ export const STOPWORDS = new Set([
 export const EDITOR_IDS = {
   PROBLEM: 'promptTemplate',
   EXPLANATION: 'explanationTemplate',
-  STUDY_EXPLANATION: 'studyEditExplanation',
 };

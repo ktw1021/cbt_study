@@ -19,12 +19,10 @@ export function acceptedAnswers(blank) {
   });
 }
 
-/** 1. 2. 가) 처럼 이어지는 목차 줄 */
-const OUTLINE_ANSWER_LINE = /^(?:[0-9]+|[가-힣]|[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]+)\s*[\.)]/;
-
 /**
- * 예전 카드: 줄바꿈으로 동의어를 넣었으면 aliases 로 옮긴다.
- * 1. / 2. 처럼 이어지는 문단은 한 정답으로 남긴다.
+ * 명시적인 구버전 동의어 구분자(||)만 이관한다.
+ * 줄바꿈은 원문이다. 문장 형태로 동의어 여부를 추측하면 로드할 때
+ * 정답이 잘리고 뒤쪽 서식·각주의 UTF-16 위치까지 어긋난다.
  */
 export function migrateBlankAnswer(blank) {
   const aliases = [...(blank?.aliases || [])];
@@ -34,12 +32,6 @@ export function migrateBlankAnswer(blank) {
     answer = byPipe[0];
     byPipe.slice(1).forEach((p) => { if (!aliases.includes(p)) aliases.push(p); });
     return { ...blank, answer, aliases };
-  }
-  const lines = answer.split('\n').map((v) => v.trim()).filter(Boolean);
-  const numbered = lines.filter((ln) => OUTLINE_ANSWER_LINE.test(ln)).length;
-  if (lines.length > 1 && numbered < 2) {
-    answer = lines[0];
-    lines.slice(1).forEach((ln) => { if (!aliases.includes(ln)) aliases.push(ln); });
   }
   return { ...blank, answer, aliases };
 }
