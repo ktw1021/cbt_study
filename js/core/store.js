@@ -20,6 +20,15 @@ export const store = {
   autoBlankEditorId: 'explanationTemplate',
   studySetupCheckedIds: null,
   studySetupPoolKey: null,
+  manageFocusIds: [],
+  manageFocusAnchorId: null,
+  _manageListFilterKey: null,
+  _createStudyReturn: null,
+  _createNotesTab: 'notes',
+  _createNotesField: 'explanation',
+  _openFnIds: null,
+  _fnExpandKnown: null,
+  _fnEditDrafts: null,
 };
 
 export function getState() {

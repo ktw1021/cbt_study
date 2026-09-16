@@ -6,8 +6,9 @@ import { acceptedAnswers } from '../domain/blank.js';
 import { loadCardProgress, getPersistedStudySession } from '../services/study-session.js';
 import { renderResumePanel } from './resume-panel.js';
 import { formatProblemHtml, formatStudyExplanationHtml } from './prompt.js';
-import { renderStudyEditForm } from './create.js';
 import { getBlankInputValue, syncDraftFromDOM, focusBlankField } from './blank-input.js';
+import { studyBlankNavHtml, syncStudyBlankNav, closeStudyBlankNav } from './study-blank-nav.js';
+import { applyStudyFontScale, renderStudyNotesPanel, placeNotesPanel } from './study-notes.js';
 
 export { getBlankInputValue, syncDraftFromDOM };
 
@@ -236,10 +237,14 @@ export function renderStudyCard() {
   const explanation = document.getElementById('studyExplanation');
 
   if (!c) {
+    prompt.classList.add('empty');
+    if (explanation) explanation.classList.add('empty');
     prompt.innerHTML = '<span class="empty">학습을 시작하세요.</span>';
     if (explanation) explanation.innerHTML = '<span class="empty">해설 영역</span>';
     document.getElementById('gradeResult').textContent = '빈칸 입력 후 Enter로 채점';
     document.getElementById('studyNavigator').innerHTML = '';
+    store._studyNavCardId = null;
+    closeStudyBlankNav();
     return;
   }
 
@@ -262,19 +267,31 @@ export function renderStudyCard() {
     }
   }
 
-  prompt.innerHTML = formatProblemHtml(c.displayText);
+  prompt.classList.remove('empty');
+  if (explanation) explanation.classList.remove('empty');
+  prompt.innerHTML = formatProblemHtml(c.displayText, c);
   explanation.innerHTML = formatStudyExplanationHtml(c, store.currentBlankStatuses);
 
-  document.getElementById('studyNavigator').innerHTML = c.blanks.map((b) =>
-    `<button class="small ghost" data-action="focus-blank" data-order="${b.order}">빈칸${b.order}</button>`).join('');
+  const navEl = document.getElementById('studyNavigator');
+  if (store._studyNavCardId !== c.id) {
+    store._studyNavCardId = c.id;
+    navEl.innerHTML = studyBlankNavHtml(c.blanks);
+    closeStudyBlankNav({ suppressHoverMs: 0 });
+  }
+  syncStudyBlankNav(store.currentBlankStatuses, store.currentBlankFocus);
 
-  document.getElementById('studyMemo').value = c.memo || '';
+  const memoEl = document.getElementById('notesMemo');
+  if (memoEl && document.activeElement !== memoEl && document.getElementById('notesPanel')?.dataset?.notesHost === 'study') {
+    memoEl.value = c.memo || '';
+  }
+  applyStudyFontScale();
+  placeNotesPanel('study');
+  renderStudyNotesPanel();
   const checked = store.currentBlankStatuses.filter((s) => s.checked).length;
   const ok = store.currentBlankStatuses.filter((s) => s.correct).length;
   document.getElementById('gradeResult').textContent = checked
     ? `채점 ${ok}/${c.blanks.length} · Enter 또는 다른 칸으로 이동 시 채점`
     : '해설에서 빈칸 입력 → Enter 또는 다음 칸으로 이동 시 채점';
-  renderStudyEditForm(c);
 }
 
 const ANSWER_GAP = 11;
@@ -378,6 +395,7 @@ export function paintInlineBlanks(statuses) {
     input.classList.toggle('bad', s.checked && !s.correct);
     input.classList.toggle('focus', store.currentBlankFocus === s.order);
   });
+  syncStudyBlankNav(statuses, store.currentBlankFocus);
   layoutBlankAnswersSoon();
 }
 
@@ -385,9 +403,14 @@ export function refreshStudyViews({ focusOrder, caretOffset = null } = {}) {
   const c = store.studyQueue[store.studyIndex];
   if (!c) return;
   syncDraftFromDOM();
-  document.getElementById('studyPrompt').innerHTML = formatProblemHtml(c.displayText);
-  document.getElementById('studyExplanation').innerHTML = formatStudyExplanationHtml(c, store.currentBlankStatuses);
+  const studyPrompt = document.getElementById('studyPrompt');
+  const studyExplanation = document.getElementById('studyExplanation');
+  studyPrompt.classList.remove('empty');
+  if (studyExplanation) studyExplanation.classList.remove('empty');
+  studyPrompt.innerHTML = formatProblemHtml(c.displayText, c);
+  studyExplanation.innerHTML = formatStudyExplanationHtml(c, store.currentBlankStatuses);
   paintInlineBlanks(store.currentBlankStatuses);
+  syncStudyBlankNav(store.currentBlankStatuses, store.currentBlankFocus);
   if (focusOrder != null) focusBlankInput(focusOrder, caretOffset);
 }
 
@@ -405,6 +428,8 @@ export function focusBlankUI(order) {
     input.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
   paintInlineBlanks(store.currentBlankStatuses);
+  syncStudyBlankNav(store.currentBlankStatuses, store.currentBlankFocus);
+  closeStudyBlankNav({ suppressHoverMs: 400 });
 }
 
 /** 채점 후 답을 지우거나 바꾸면 해당 칸만 다시 풀기 상태로 */

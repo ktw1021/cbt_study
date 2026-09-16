@@ -5,7 +5,6 @@ import {
   getUserFolders,
   getCard,
   getFolder,
-  getCardsFiltered,
   countCardsInFolder,
   countUnclassifiedCards,
   getUserCards,
@@ -13,7 +12,14 @@ import {
 } from '../domain/queries.js';
 import { buildFolderOptions, fillFolderSelect } from './folder-select.js';
 import { formatProblemHtml, formatPromptHtml } from './prompt.js';
+import { renderMarkedHtml, renderTemplateHtml } from './mark-render.js';
+import { blankShapeHint } from '../utils/text.js';
 import { readFilters } from './sidebar.js';
+import {
+  syncManageListFilterKey,
+  getManageFocusIds,
+  getManageVisibleCards,
+} from './manage-selection.js';
 
 /** 현재 위치 빵부스러기 — 「전체 ▸ 상위 ▸ 현재」, 각 단계 클릭 시 이동 */
 export function renderFolderBreadcrumb() {
@@ -96,25 +102,33 @@ function folderNodeHtml(folder, all, userId) {
   </div>`;
 }
 
-/** 카드 목록 */
+/** 카드 목록 — 학습 selectedIds 체크박스와 별개로, 관리 포커스만 표시 */
 export function renderCardList() {
   const list = document.getElementById('cardList');
-  const cards = getCardsFiltered(readFilters(store.activeFolderId));
+  syncManageListFilterKey();
+  const cards = getManageVisibleCards();
+  const focusIds = new Set(getManageFocusIds());
+  const anchorId = store.manageFocusAnchorId;
 
   if (!cards.length) {
     list.innerHTML = '<div class="list-item"><span class="item-sub">카드 없음</span></div>';
     return;
   }
 
-  list.innerHTML = cards.map((c) => `
-    <div class="list-item ${store.activeManageId === c.id ? 'active' : ''}" draggable="true"
+  list.innerHTML = cards.map((c) => {
+    const focus = focusIds.has(c.id) ? ' is-manage-focus' : '';
+    const anchor = c.id === anchorId ? ' is-manage-anchor' : '';
+    const active = store.activeManageId === c.id ? ' active' : '';
+    return `
+    <div class="list-item${active}${focus}${anchor}" draggable="true"
       data-action="select-card" data-id="${c.id}" data-drag-card="${c.id}">
       <span class="flag flag-${c.flagColor}"></span>
-      <div style="flex:1;min-width:0">
+      <div class="manage-card-body" style="flex:1;min-width:0">
         <div class="item-title">${escapeHtml(c.title || shorten(c.displayText))}</div>
         <div class="item-sub">${escapeHtml(folderPathNames(c.folderId))} · 빈칸 ${c.blanks.length} · 회독 ${c.rounds}${c.isSample ? ' · 샘플' : ''}</div>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 
 /** 카드 상세 */
@@ -140,8 +154,18 @@ export function renderManageDetail(id) {
       <div class="col">
         <div><strong>${escapeHtml(c.title)}</strong> <span class="flag flag-${c.flagColor}"></span></div>
         <div class="caption">${escapeHtml(folderPathNames(c.folderId))} · 회독 ${c.rounds} · 오답 ${c.wrongCount}${c.author ? ` · 제작 ${escapeHtml(c.author)}` : ''}</div>
-        <div><strong>문제</strong><br>${formatProblemHtml(c.displayText)}</div>
-        <div><strong>해설</strong><br>${formatPromptHtml(c.explanationText || '', c.blanks || [])}</div>
+        <div><strong>문제</strong><br>${c.displayText?.trim()
+          ? renderMarkedHtml(c.displayText, { marks: c.textMarks?.display, footnotes: c.footnotes, field: 'display' })
+          : formatProblemHtml(c.displayText, c)}</div>
+        <div><strong>해설</strong><br>${renderTemplateHtml(c.explanationText || '', c.blanks || [], {
+          marks: c.textMarks?.explanation,
+          footnotes: c.footnotes,
+          field: 'explanation',
+          renderAtom: (atom) => {
+            const b = (c.blanks || []).find((x) => x.order === atom.order);
+            return `<span class="blank-inline blank-shape">${escapeHtml(blankShapeHint(b?.answer || ''))}</span>`;
+          },
+        }) || formatPromptHtml(c.explanationText || '', c.blanks || [])}</div>
         <div><strong>정답</strong><br>${c.blanks.map((b) => `빈칸${b.order}: ${escapeHtml(b.answer)}`).join('<br>') || '없음'}</div>
         <div><strong>메모</strong><br>${escapeHtml(c.memo || '(없음)')}</div>
         <label>폴더 이동</label>
@@ -166,10 +190,6 @@ export function renderFolderSelects() {
   if (!user) return;
   fillFolderSelect(document.getElementById('cardFolder'), {
     value: document.getElementById('cardFolder')?.value,
-    includeUnclassified: true,
-  });
-  fillFolderSelect(document.getElementById('studyEditFolder'), {
-    value: document.getElementById('studyEditFolder')?.value,
     includeUnclassified: true,
   });
 }

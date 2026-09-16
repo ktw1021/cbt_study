@@ -1,15 +1,12 @@
 /**
  * 칩(chip) 기반 빈칸 에디터
  *
- * - 편집 표면은 contenteditable. 빈칸은 편집 불가한 "칩" 노드로 표시되어
- *   사용자가 [[BLANKn]] 토큰을 직접 보거나 깨뜨릴 수 없다.
- * - 저장 포맷은 기존과 동일: explanationText(= ...[[BLANK1]]...) + blanks[].
- *   읽을 때 토큰→칩, 저장할 때 칩→토큰으로 변환만 한다(데이터 호환).
+ * 저장 포맷은 기존과 동일: explanationText + blanks[].
+ * 히스토리는 innerHTML 이 아니라 template/blanks + 외부 메타(서식·각주) 한 스냅샷.
  */
 import { syncTemplateAndBlanks } from '../domain/blank.js';
-import { normalizeTight, normalizeNewlines, splitAnswers } from '../utils/text.js';
+import { uid, normalizeTight, normalizeNewlines, splitAnswers } from '../utils/text.js';
 
-/** 동의어는 칩 dataset에 `||`로 이어 담고, 읽을 때 배열로 되돌린다 */
 export const ALIAS_SEP = ' || ';
 export function formatAliases(list) {
   return (list || []).filter(Boolean).join(ALIAS_SEP);
@@ -18,78 +15,93 @@ export function parseAliases(text) {
   return splitAnswers(text);
 }
 
-const CHIP_CLASS = 'cz-chip';
+export const CHIP_CLASS = 'cz-chip';
 const initialized = new Set();
-
-/** 에디터별 편집 스냅샷 히스토리 (자체 Ctrl+Z) */
 const history = new Map();
 const MAX_HIST = 100;
+const extraCapture = new Map();
+const extraRestore = new Map();
 
-function resetHistory(id) {
-  const el = document.getElementById(id);
-  history.set(id, { stack: el ? [el.innerHTML] : [''], index: 0, timer: null, applying: false });
+export function registerEditorHistoryExtra(id, capture, restore) {
+  extraCapture.set(id, capture);
+  extraRestore.set(id, restore);
 }
 
-function snapshot(id, immediate = false) {
-  const el = document.getElementById(id);
-  const h = history.get(id);
-  if (!el || !h || h.applying) return;
-  const html = el.innerHTML;
-  const push = () => {
-    if (h.stack[h.index] === html) return;
-    h.stack = h.stack.slice(0, h.index + 1);
-    h.stack.push(html);
-    h.index = h.stack.length - 1;
-    if (h.stack.length > MAX_HIST) { h.stack.shift(); h.index -= 1; }
-  };
-  clearTimeout(h.timer);
-  if (immediate) push();
-  else h.timer = setTimeout(push, 250);
+function packBlankSide(b = {}) {
+  return JSON.stringify({
+    lastInput: b.lastInput || '',
+    lastResult: b.lastResult ?? null,
+    manualResult: b.manualResult ?? null,
+  });
 }
 
-function applyHistory(id, html) {
-  const el = document.getElementById(id);
-  const h = history.get(id);
-  if (!el || !h) return;
-  h.applying = true;
-  el.innerHTML = html;
-  el.dispatchEvent(new Event('input', { bubbles: true }));
-  h.applying = false;
-}
-
-export function chipUndo(id) {
-  const h = history.get(id);
-  if (!h || h.index <= 0) return false;
-  clearTimeout(h.timer);
-  h.index -= 1;
-  applyHistory(id, h.stack[h.index]);
-  return true;
-}
-
-export function chipRedo(id) {
-  const h = history.get(id);
-  if (!h || h.index >= h.stack.length - 1) return false;
-  clearTimeout(h.timer);
-  h.index += 1;
-  applyHistory(id, h.stack[h.index]);
-  return true;
+function unpackBlankSide(raw) {
+  if (!raw) return { lastInput: '', lastResult: null, manualResult: null };
+  try {
+    const o = JSON.parse(raw);
+    return {
+      lastInput: o.lastInput || '',
+      lastResult: o.lastResult ?? null,
+      manualResult: o.manualResult ?? null,
+    };
+  } catch {
+    return { lastInput: '', lastResult: null, manualResult: null };
+  }
 }
 
 function isChip(node) {
   return node && node.nodeType === 1 && node.classList && node.classList.contains(CHIP_CLASS);
 }
 
-/** 선택이 기존 칩을 걸치는가 — 칩을 반쯤 잘라내는 경우만 걸러낸다 */
-function rangeCrossesChip(range, root) {
-  return [...root.querySelectorAll(`.${CHIP_CLASS}`)].some((chip) => range.intersectsNode(chip));
+function isFnMark(node) {
+  return node && node.nodeType === 1 && node.classList && node.classList.contains('tm-fn');
 }
 
-function makeChipEl(answer, aliases = []) {
+function isLineWrap(node) {
+  return node && node.nodeType === 1 && node.classList && node.classList.contains('tm-line');
+}
+
+export function nextLineWrap(node) {
+  let n = node?.nextSibling;
+  while (n) {
+    if (isLineWrap(n)) return n;
+    if (!isFnMark(n) && !(n.nodeType === 3 && n.data === '')) return null;
+    n = n.nextSibling;
+  }
+  return null;
+}
+
+export function prevLineWrap(node) {
+  let n = node?.previousSibling;
+  while (n) {
+    if (isLineWrap(n)) return n;
+    if (!isFnMark(n) && !(n.nodeType === 3 && n.data === '')) return null;
+    n = n.previousSibling;
+  }
+  return null;
+}
+
+function isPlaceholderBr(node) {
+  return !!(node && node.nodeType === 1 && node.nodeName === 'BR' && node.dataset.tmBr === '1');
+}
+
+function isVisuallyEmptyLine(node) {
+  if (!isLineWrap(node)) return false;
+  return ![...node.childNodes].some((c) => {
+    if (isPlaceholderBr(c) || isFnMark(c)) return false;
+    if (c.nodeType === 3 && !(c.nodeValue || '')) return false;
+    return true;
+  });
+}
+
+export function makeChipEl(answer, aliases = [], meta = {}) {
   const span = document.createElement('span');
   span.className = CHIP_CLASS;
   span.contentEditable = 'false';
   span.dataset.answer = answer || '';
   span.dataset.aliases = formatAliases(aliases);
+  span.dataset.blankId = meta.id || uid('b');
+  span.dataset.blankSide = packBlankSide(meta);
   span.appendChild(document.createTextNode(answer || ' '));
   const x = document.createElement('button');
   x.type = 'button';
@@ -108,20 +120,515 @@ function setChipText(chip, answer) {
   else chip.insertBefore(document.createTextNode(answer || ' '), chip.firstChild);
 }
 
-/** 에디터 1회 초기화 — Enter/붙여넣기를 평문으로 강제해 DOM을 단순 유지 */
+function captureModel(id) {
+  const { template, blanks } = readChipEditor(id);
+  const extra = extraCapture.get(id)?.() || {};
+  return JSON.stringify({ template, blanks, extra });
+}
+
+function restoreModel(id, raw) {
+  const h = history.get(id);
+  if (!h) return;
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  h.applying = true;
+  if (parsed && typeof parsed === 'object' && 'template' in parsed) {
+    setChipEditorContent(id, parsed.template, parsed.blanks || [], { resetHistory: false });
+    extraRestore.get(id)?.(parsed.extra || {});
+  } else if (typeof raw === 'string') {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = raw;
+  }
+  const el = document.getElementById(id);
+  if (el) el.dispatchEvent(new Event('input', { bubbles: true }));
+  h.applying = false;
+}
+
+function resetHistory(id) {
+  history.set(id, {
+    stack: [captureModel(id)],
+    index: 0,
+    timer: null,
+    applying: false,
+  });
+}
+
+export function snapshotEditor(id, immediate = false) {
+  const el = document.getElementById(id);
+  const h = history.get(id);
+  if (!el || !h || h.applying) return;
+  const rec = captureModel(id);
+  const push = () => {
+    if (h.stack[h.index] === rec) return;
+    h.stack = h.stack.slice(0, h.index + 1);
+    h.stack.push(rec);
+    h.index = h.stack.length - 1;
+    if (h.stack.length > MAX_HIST) { h.stack.shift(); h.index -= 1; }
+  };
+  clearTimeout(h.timer);
+  h.timer = null;
+  if (immediate) push();
+  else h.timer = setTimeout(push, 250);
+}
+
+export function resetEditorHistory(id) {
+  resetHistory(id);
+}
+
+function snapshot(id, immediate = false) {
+  snapshotEditor(id, immediate);
+}
+
+function flushPendingSnapshot(id) {
+  const h = history.get(id);
+  if (!h?.timer) return;
+  clearTimeout(h.timer);
+  h.timer = null;
+  snapshotEditor(id, true);
+}
+
+export function chipUndo(id) {
+  const h = history.get(id);
+  if (!h) return false;
+  flushPendingSnapshot(id);
+  if (h.index <= 0) return false;
+  h.index -= 1;
+  restoreModel(id, h.stack[h.index]);
+  return true;
+}
+
+export function chipRedo(id) {
+  const h = history.get(id);
+  if (!h) return false;
+  flushPendingSnapshot(id);
+  if (h.index >= h.stack.length - 1) return false;
+  h.index += 1;
+  restoreModel(id, h.stack[h.index]);
+  return true;
+}
+
+export function isChipEditorApplying(id) {
+  return !!history.get(id)?.applying;
+}
+
+function rangeCrossesChip(range, root) {
+  return [...root.querySelectorAll(`.${CHIP_CLASS}`)].some((chip) => range.intersectsNode(chip));
+}
+
+/** 가시 원문 = 텍스트 + 칩 정답. 각주 버튼·× 는 제외. */
+export function editorVisibleText(el) {
+  if (!el) return '';
+  return visibleWalk(el).text;
+}
+
+export function editorVisibleAtoms(el) {
+  if (!el) return [];
+  return visibleWalk(el).atoms;
+}
+
+function visibleWalk(root) {
+  let text = '';
+  const atoms = [];
+  const walk = (node) => {
+    if (!node) return;
+    if (node.nodeType === 3) {
+      text += node.nodeValue || '';
+      return;
+    }
+    if (node.nodeType !== 1) return;
+    if (isFnMark(node) || node.classList.contains('cz-chip-x')) return;
+    if (isChip(node)) {
+      const answer = normalizeNewlines(node.dataset.answer || '');
+      const start = text.length;
+      text += answer;
+      atoms.push({
+        start,
+        end: text.length,
+        order: atoms.length + 1,
+        el: node,
+      });
+      return;
+    }
+    if (node.nodeName === 'BR') {
+      if (!isPlaceholderBr(node)) text += '\n';
+      return;
+    }
+    const kids = [...node.childNodes];
+    kids.forEach(walk);
+    if (isLineWrap(node) && nextLineWrap(node)) {
+      text += '\n';
+    }
+  };
+  [...root.childNodes].forEach(walk);
+  return { text: normalizeNewlines(text), atoms };
+}
+
+export function visibleOffsetFromPoint(root, node, offset) {
+  if (!root || !node) return 0;
+  let pos = 0;
+  let found = false;
+  const walk = (n) => {
+    if (found || !n) return;
+    if (n === node && n.nodeType === 3) {
+      pos += Math.max(0, Math.min(offset, (n.nodeValue || '').length));
+      found = true;
+      return;
+    }
+    if (n.nodeType === 3) {
+      pos += (n.nodeValue || '').length;
+      return;
+    }
+    if (n.nodeType !== 1) return;
+    if (isFnMark(n) || n.classList.contains('cz-chip-x')) {
+      if (n === node || n.contains(node)) found = true;
+      return;
+    }
+    if (isChip(n)) {
+      if (n === node || n.contains(node)) {
+        const ans = normalizeNewlines(n.dataset.answer || '');
+        pos += ans.length;
+        found = true;
+        return;
+      }
+      pos += normalizeNewlines(n.dataset.answer || '').length;
+      return;
+    }
+    if (n.nodeName === 'BR') {
+      if (isPlaceholderBr(n)) {
+        if (n === node) found = true;
+        return;
+      }
+      if (n === node) { found = true; return; }
+      pos += 1;
+      return;
+    }
+    if (n === node) {
+      const kids = [...n.childNodes];
+      const max = Math.max(0, Math.min(offset, kids.length));
+      for (let i = 0; i < max; i += 1) walk(kids[i]);
+      found = true;
+      return;
+    }
+    const kids = [...n.childNodes];
+    for (let i = 0; i < kids.length; i += 1) walk(kids[i]);
+    if (isLineWrap(n) && nextLineWrap(n) && !found) {
+      pos += 1;
+    }
+  };
+  walk(root);
+  return pos;
+}
+
+export function rangeToVisibleOffsets(root, range) {
+  if (!root || !range) return { start: 0, end: 0 };
+  const a = visibleOffsetFromPoint(root, range.startContainer, range.startOffset);
+  const b = visibleOffsetFromPoint(root, range.endContainer, range.endOffset);
+  return a <= b ? { start: a, end: b } : { start: b, end: a };
+}
+
+export function getEditorSelectionOffsets(id) {
+  const el = document.getElementById(id);
+  const sel = window.getSelection();
+  if (!el || !sel || sel.rangeCount === 0 || !el.contains(sel.anchorNode)) {
+    const len = editorVisibleText(el).length;
+    return { start: len, end: len };
+  }
+  return rangeToVisibleOffsets(el, sel.getRangeAt(0));
+}
+
+const caretGoalX = new WeakMap();
+
+function lineHeightPx(el) {
+  const cs = getComputedStyle(el);
+  const lh = parseFloat(cs.lineHeight);
+  if (Number.isFinite(lh) && lh > 0) return lh;
+  return (parseFloat(cs.fontSize) || 16) * 1.9;
+}
+
+function isCaretLike(box) {
+  return !!(box && box.height > 0 && box.height < 80 && box.width < 240);
+}
+
+function collapsedRect(node, offset) {
+  try {
+    const r = document.createRange();
+    r.setStart(node, offset);
+    r.collapse(true);
+    const own = [...r.getClientRects()].find((box) => isCaretLike(box));
+    if (own) return own;
+    const box = r.getBoundingClientRect();
+    if (isCaretLike(box)) return box;
+    if (node.nodeType === 3) {
+      const len = (node.nodeValue || '').length;
+      if (len) {
+        const e = document.createRange();
+        if (offset < len) {
+          e.setStart(node, offset);
+          e.setEnd(node, Math.min(len, offset + 1));
+        } else {
+          e.setStart(node, Math.max(0, offset - 1));
+          e.setEnd(node, offset);
+        }
+        const glyph = [...e.getClientRects()].find((g) => isCaretLike(g));
+        if (glyph) return glyph;
+      }
+    }
+    if (node.nodeType === 1) {
+      const child = node.childNodes[offset] || node.childNodes[offset - 1];
+      if (child?.nodeName === 'BR') {
+        const br = child.getBoundingClientRect();
+        if (br.height > 0 || br.width > 0) {
+          return {
+            top: br.top,
+            bottom: br.top + Math.max(br.height, 2),
+            left: br.left,
+            right: br.right || br.left,
+            height: Math.max(br.height, 2),
+            width: br.width,
+          };
+        }
+      }
+      if (child?.nodeType === 3) {
+        return collapsedRect(child, child === node.childNodes[offset] ? 0 : (child.nodeValue || '').length);
+      }
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+function sameVisualLine(a, b) {
+  if (!a || !b) return false;
+  const mid = a.top + (a.height || 0) / 2;
+  const bottom = b.bottom || (b.top + (b.height || 0));
+  return mid >= b.top - 2 && mid <= bottom + 2;
+}
+
+function scrollCaretIntoEditor(el, node, offset) {
+  const box = collapsedRect(node, offset);
+  if (!box) return;
+  const host = el.getBoundingClientRect();
+  const margin = 28;
+  if (box.bottom > host.bottom - margin) el.scrollTop += box.bottom - (host.bottom - margin);
+  else if (box.top < host.top + margin) el.scrollTop -= (host.top + margin) - box.top;
+}
+
+/** contenteditable + br/tm-line 에서 화살표 키 리피트가 맨 끝으로 점프하지 않게 시각 줄 단위로 이동 */
+export function moveChipEditorByVisualLine(el, dir, { extend = false, page = false } = {}) {
+  if (!el || !dir) return false;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || !sel.focusNode || !el.contains(sel.focusNode)) return false;
+
+  if (!sel.isCollapsed && !extend) {
+    const range = sel.getRangeAt(0);
+    if (dir > 0) sel.collapse(range.endContainer, range.endOffset);
+    else sel.collapse(range.startContainer, range.startOffset);
+  }
+
+  const focusNode = sel.focusNode;
+  const focusOffset = sel.focusOffset;
+  const from = visibleOffsetFromPoint(el, focusNode, focusOffset);
+  const fromRect = collapsedRect(focusNode, focusOffset) || rectAtVisibleOffset(el, from);
+  if (!fromRect) return false;
+  const lh = lineHeightPx(el);
+  let goalX = caretGoalX.get(el);
+  if (goalX == null) {
+    goalX = fromRect.left + Math.min(1, fromRect.width / 2);
+    caretGoalX.set(el, goalX);
+  }
+
+  const lines = page ? Math.max(2, Math.floor((el.clientHeight - lh * 2) / lh)) : 1;
+  let pos = from;
+  for (let i = 0; i < lines; i += 1) {
+    const next = adjacentVisualLineOffset(el, pos, dir, goalX);
+    if (next === pos) break;
+    pos = next;
+  }
+  if (pos === from) return false;
+
+  if (extend) {
+    const loc = visibleLocation(el, pos);
+    try { sel.extend(loc.node, loc.offset); } catch { return false; }
+  } else {
+    setVisibleSelection(el, pos, pos);
+  }
+  const placed = visibleLocation(el, pos);
+  scrollCaretIntoEditor(el, placed.node, placed.offset);
+  return true;
+}
+
+export function clearChipEditorCaretGoal(el) {
+  if (el) caretGoalX.delete(el);
+}
+
+function visibleLocation(el, target) {
+  const goal = Math.max(0, target);
+  let pos = 0;
+  let hit = null;
+  const walk = (n) => {
+    if (hit || !n) return;
+    if (n.nodeType === 3) {
+      const len = (n.nodeValue || '').length;
+      if (pos + len >= goal) {
+        hit = { node: n, offset: goal - pos };
+        return;
+      }
+      pos += len;
+      return;
+    }
+    if (n.nodeType !== 1) return;
+    if (isFnMark(n) || n.classList.contains('cz-chip-x')) return;
+    if (isChip(n)) {
+      const len = normalizeNewlines(n.dataset.answer || '').length;
+      if (goal <= pos + len) {
+        const index = [...n.parentNode.childNodes].indexOf(n);
+        hit = { node: n.parentNode, offset: index + (goal > pos ? 1 : 0) };
+      }
+      pos += len;
+      return;
+    }
+    if (n.nodeName === 'BR') {
+      if (isPlaceholderBr(n)) return;
+      if (pos + 1 >= goal) {
+        hit = { node: n.parentNode, offset: [...n.parentNode.childNodes].indexOf(n) + (goal > pos ? 1 : 0) };
+        return;
+      }
+      pos += 1;
+      return;
+    }
+    [...n.childNodes].forEach(walk);
+    if (isLineWrap(n) && !hit && isVisuallyEmptyLine(n) && pos === goal) {
+      hit = { node: n, offset: 0 };
+      return;
+    }
+    if (isLineWrap(n) && nextLineWrap(n) && !hit) {
+      pos += 1;
+    }
+  };
+  walk(el);
+  return hit || { node: el, offset: el.childNodes.length };
+}
+
+function rectAtVisibleOffset(el, offset) {
+  const loc = visibleLocation(el, offset);
+  return collapsedRect(loc.node, loc.offset);
+}
+
+function visualLineStart(el, from, startRect) {
+  let lo = 0;
+  let hi = from;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const rect = rectAtVisibleOffset(el, mid);
+    if (rect && sameVisualLine(startRect, rect)) hi = mid;
+    else lo = mid + 1;
+  }
+  return lo;
+}
+
+function visualLineEnd(el, from, startRect, visLen) {
+  let lo = from;
+  let hi = visLen;
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi + 1) / 2);
+    const rect = rectAtVisibleOffset(el, mid);
+    if (rect && sameVisualLine(startRect, rect)) lo = mid;
+    else hi = mid - 1;
+  }
+  return lo;
+}
+
+function closestOffsetOnLine(el, start, end, goalX, fallback) {
+  let best = fallback;
+  let bestDx = Infinity;
+  let lo = start;
+  let hi = end;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    const rect = rectAtVisibleOffset(el, mid);
+    if (!rect) break;
+    const dx = Math.abs(rect.left - goalX);
+    if (dx < bestDx) {
+      bestDx = dx;
+      best = mid;
+    }
+    if (rect.left < goalX) lo = mid + 1;
+    else if (rect.left > goalX) hi = mid - 1;
+    else return mid;
+  }
+  return best;
+}
+
+function adjacentVisualLineOffset(el, from, dir, goalX) {
+  const visLen = editorVisibleText(el).length;
+  const startRect = rectAtVisibleOffset(el, from);
+  if (!startRect || visLen <= 0) return from;
+  const step = dir > 0 ? 1 : -1;
+  const limit = dir > 0 ? visLen : 0;
+  let seed = from;
+  for (let i = 0; i < 400; i += 1) {
+    seed += step;
+    if (dir > 0 ? seed > limit : seed < limit) return from;
+    const rect = rectAtVisibleOffset(el, seed);
+    if (rect && !sameVisualLine(startRect, rect)) {
+      const a = visualLineStart(el, seed, rect);
+      const b = visualLineEnd(el, seed, rect, visLen);
+      return closestOffsetOnLine(el, a, b, goalX, seed);
+    }
+  }
+  return from;
+}
+
+export function setVisibleSelection(el, start, end) {
+  if (!el) return;
+  const sel = window.getSelection();
+  const range = document.createRange();
+  const a = Math.max(0, start);
+  const b = Math.max(a, end);
+  const sa = visibleLocation(el, a);
+  const sb = visibleLocation(el, b);
+  try {
+    range.setStart(sa.node, sa.offset);
+    range.setEnd(sb.node, sb.offset);
+    sel.removeAllRanges();
+    sel.addRange(range);
+  } catch { /* ignore */ }
+}
+
 export function initChipEditor(id) {
   const el = document.getElementById(id);
   if (!el || initialized.has(id)) return;
   initialized.add(id);
+  let composing = false;
+  el.addEventListener('compositionstart', () => { composing = true; });
+  el.addEventListener('compositionend', () => { composing = false; });
 
   el.addEventListener('keydown', (e) => {
+    if (composing || e.isComposing) return;
     if (e.key === 'Enter') {
+      if (extraCapture.has(id) || e.isComposing) return;
       e.preventDefault();
       insertTextAtCaret(el, '\n');
       el.dispatchEvent(new Event('input', { bubbles: true }));
       return;
     }
-    // 에디터 자체 되돌리기/다시하기 (글자 입력·빈칸 만들기·해제 모두 포함)
+    const vertical = e.key === 'ArrowDown' || e.key === 'ArrowUp'
+      || e.key === 'PageDown' || e.key === 'PageUp';
+    if (vertical && !e.ctrlKey && !e.altKey && !e.metaKey && !e.isComposing) {
+      e.preventDefault();
+      const dir = (e.key === 'ArrowDown' || e.key === 'PageDown') ? 1 : -1;
+      moveChipEditorByVisualLine(el, dir, {
+        extend: e.shiftKey,
+        page: e.key === 'PageDown' || e.key === 'PageUp',
+      });
+      return;
+    }
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'Home' || e.key === 'End') {
+      caretGoalX.delete(el);
+    }
     if (e.ctrlKey && !e.altKey && e.key.toLowerCase() === 'z') {
       e.preventDefault();
       if (e.shiftKey) chipRedo(id);
@@ -133,6 +640,7 @@ export function initChipEditor(id) {
       chipRedo(id);
     }
   });
+  el.addEventListener('mousedown', () => caretGoalX.delete(el));
 
   el.addEventListener('paste', (e) => {
     e.preventDefault();
@@ -141,11 +649,15 @@ export function initChipEditor(id) {
     el.dispatchEvent(new Event('input', { bubbles: true }));
   });
 
-  el.addEventListener('input', () => snapshot(id));
+  el.addEventListener('input', (e) => {
+    if (e.isComposing) return;
+    if (history.get(id)?.applying) return;
+    snapshot(id);
+  });
   resetHistory(id);
 }
 
-function insertTextAtCaret(el, text) {
+export function insertTextAtCaret(el, text) {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || !el.contains(sel.anchorNode)) {
     el.appendChild(document.createTextNode(text));
@@ -163,8 +675,7 @@ function insertTextAtCaret(el, text) {
   el.normalize();
 }
 
-/** 토큰 템플릿 + blanks → 칩 DOM */
-export function setChipEditorContent(id, explanationText, blanks = []) {
+export function setChipEditorContent(id, explanationText, blanks = [], opts = {}) {
   const el = document.getElementById(id);
   if (!el) return;
   initChipEditor(id);
@@ -178,11 +689,11 @@ export function setChipEditorContent(id, explanationText, blanks = []) {
   while ((m = re.exec(tmpl)) !== null) {
     if (m.index > last) el.appendChild(document.createTextNode(tmpl.slice(last, m.index)));
     const blank = blankMap.get(Number(m[1]));
-    el.appendChild(makeChipEl(blank?.answer || '', blank?.aliases));
+    el.appendChild(makeChipEl(blank?.answer || '', blank?.aliases, blank || {}));
     last = m.index + m[0].length;
   }
   if (last < tmpl.length) el.appendChild(document.createTextNode(tmpl.slice(last)));
-  resetHistory(id);
+  if (opts.resetHistory !== false) resetHistory(id);
 }
 
 function nodeToTemplate(node, picked) {
@@ -191,15 +702,25 @@ function nodeToTemplate(node, picked) {
     if (child.nodeType === 3) {
       out += child.nodeValue;
     } else if (isChip(child)) {
+      const side = unpackBlankSide(child.dataset.blankSide);
       picked.push({
+        id: child.dataset.blankId || '',
         answer: child.dataset.answer || '',
         aliases: parseAliases(child.dataset.aliases),
+        lastInput: side.lastInput,
+        lastResult: side.lastResult,
+        manualResult: side.manualResult,
       });
       out += `[[BLANK${picked.length}]]`;
+    } else if (isFnMark(child) || child.classList?.contains('cz-chip-x')) {
+      /* skip */
     } else if (child.nodeName === 'BR') {
-      out += '\n';
+      if (!isPlaceholderBr(child)) out += '\n';
+    } else if (isLineWrap(child)) {
+      if (prevLineWrap(child)) out += '\n';
+      else if (out && !out.endsWith('\n')) out += '\n';
+      out += nodeToTemplate(child, picked);
     } else if (child.nodeType === 1) {
-      // 브라우저가 삽입한 div/p 등 블록은 줄바꿈으로 취급
       if (out && !out.endsWith('\n') && /^(DIV|P)$/.test(child.nodeName)) out += '\n';
       out += nodeToTemplate(child, picked);
     }
@@ -207,26 +728,100 @@ function nodeToTemplate(node, picked) {
   return out;
 }
 
-/** 칩 DOM → { template, blanks }  (기존 저장 포맷) */
+export function remapVisiblePoint(pos, delStart, delEnd, insLen, side = 'right') {
+  const p = Math.max(0, pos | 0);
+  const d0 = Math.min(delStart, delEnd);
+  const d1 = Math.max(delStart, delEnd);
+  const delta = insLen - (d1 - d0);
+  if (p < d0 || (p === d0 && side === 'left')) return p;
+  if (p >= d1) return p + delta;
+  return d0 + insLen;
+}
+
+/** 현재 가시 원문(cur)에서 목표(next)로 가는 단일 치환 구간. */
+export function visibleTextDiff(from, to) {
+  const a = normalizeNewlines(from ?? '');
+  const b = normalizeNewlines(to ?? '');
+  if (a === b) return { start: 0, end: 0, inserted: '' };
+  let pre = 0;
+  const minLen = Math.min(a.length, b.length);
+  while (pre < minLen && a[pre] === b[pre]) pre += 1;
+  let suf = 0;
+  while (
+    suf < a.length - pre
+    && suf < b.length - pre
+    && a[a.length - 1 - suf] === b[b.length - 1 - suf]
+  ) suf += 1;
+  const start = pre;
+  const end = a.length - suf;
+  const inserted = b.slice(pre, b.length - suf);
+  return { start, end, inserted };
+}
+
+/** 가시 원문이 canonical 과 다를 때 칩·빈칸 메타는 유지하고 DOM 을 맞춘다. */
+export function rebuildEditorVisibleText(id, visibleText, caret) {
+  const el = document.getElementById(id);
+  if (!el) return false;
+  const next = normalizeNewlines(visibleText ?? '');
+  const cur = editorVisibleText(el);
+  if (cur === next) {
+    if (caret) setVisibleSelection(el, caret.start, caret.end);
+    return false;
+  }
+  const patch = visibleTextDiff(cur, next);
+  const insLen = patch.inserted.length;
+  const { blanks } = readChipEditor(id);
+  const atoms = editorVisibleAtoms(el)
+    .filter((atom) => !(patch.end > patch.start && atom.start < patch.end && atom.end > patch.start))
+    .map((atom) => ({
+      ...atom,
+      start: remapVisiblePoint(atom.start, patch.start, patch.end, insLen),
+      end: remapVisiblePoint(atom.end, patch.start, patch.end, insLen, 'left'),
+    }));
+  let template = next;
+  [...atoms].sort((a, b) => b.start - a.start || b.order - a.order).forEach((atom) => {
+    const a = Math.max(0, Math.min(template.length, atom.start));
+    const b = Math.max(a, Math.min(template.length, atom.end));
+    template = `${template.slice(0, a)}[[BLANK${atom.order}]]${template.slice(b)}`;
+  });
+  const h = history.get(id);
+  const wasApplying = h?.applying;
+  if (h) h.applying = true;
+  setChipEditorContent(id, template, blanks, { resetHistory: false });
+  if (h) h.applying = wasApplying;
+  if (caret) setVisibleSelection(el, caret.start, caret.end);
+  return true;
+}
+
 export function readChipEditor(id) {
   const el = document.getElementById(id);
   if (!el) return { template: '', blanks: [] };
   const picked = [];
   const template = normalizeNewlines(nodeToTemplate(el, picked));
   const blanks = picked.map((p, i) => ({
+    id: p.id || uid('b'),
     order: i + 1,
     answer: normalizeNewlines(p.answer),
     aliases: p.aliases,
+    lastInput: p.lastInput || '',
+    lastResult: p.lastResult ?? null,
+    manualResult: p.manualResult ?? null,
   }));
-  return syncTemplateAndBlanks(template, blanks);
+  const synced = syncTemplateAndBlanks(template, blanks);
+  synced.blanks = synced.blanks.map((b, i) => ({
+    ...b,
+    id: blanks[i]?.id || b.id,
+    lastInput: blanks[i]?.lastInput || b.lastInput || '',
+    lastResult: blanks[i]?.lastResult ?? b.lastResult ?? null,
+    manualResult: blanks[i]?.manualResult ?? b.manualResult ?? null,
+  }));
+  return synced;
 }
 
-/** 빈칸 없는 순수 텍스트 (자동 후보 추출용) */
 export function readChipPlainText(id) {
   return readChipEditor(id).template.replace(/\[\[BLANK\d+\]\]/g, ' ');
 }
 
-/** 현재 선택 영역을 칩으로 (Ctrl+B / 버튼) */
 export function chipMakeBlank(id) {
   const el = document.getElementById(id);
   if (!el) return false;
@@ -235,7 +830,6 @@ export function chipMakeBlank(id) {
   const range = sel.getRangeAt(0);
   if (!el.contains(range.commonAncestorContainer)) return false;
 
-  // 선택이 없으면(커서만 있으면) 커서 주변 단어를 자동으로 선택
   const autoPicked = range.collapsed;
   if (range.collapsed) {
     const node = range.startContainer;
@@ -254,19 +848,17 @@ export function chipMakeBlank(id) {
     sel.addRange(range);
   }
 
-  // 빈칸을 해제한 자리는 별도 텍스트 노드로 남아, 그 구간을 다시 묶으면 선택이 여러 노드에 걸친다.
-  // 그래서 "한 텍스트 노드 안"이 아니라 "칩을 걸치지 않을 것"만 조건으로 둔다.
   if (rangeCrossesChip(range, el)) return false;
 
-  const original = normalizeNewlines(range.toString());
+  // Range.toString() omits paragraph/BR boundaries (and can include UI text).
+  // Use the same visible source and offsets as formatting and footnotes.
+  const selected = rangeToVisibleOffsets(el, range);
+  const original = editorVisibleText(el).slice(selected.start, selected.end);
   const leadingWs = (original.match(/^\s*/)?.[0]) ?? '';
   const trailingWs = (original.match(/\s*$/)?.[0]) ?? '';
   let text = original.trim();
   if (!text) return false;
 
-  // 조사/접미사 분리 (긴 것부터)
-  // - 커서 기반 자동 선택일 때만 적용 (드래그로 포함하려는 경우를 존중)
-  // - 조사/접미사는 "삭제"가 아니라 칩 뒤에 남긴다
   let suffixText = '';
   if (autoPicked) {
     const SUFFIXES = [
@@ -300,22 +892,20 @@ export function chipMakeBlank(id) {
   sel.addRange(after);
 
   el.dispatchEvent(new Event('input', { bubbles: true }));
+  snapshot(id, true);
   return true;
 }
 
-/** 칩 엘리먼트 제거 → 정답 텍스트로 복구 */
 export function chipRemoveEl(chipEl) {
   if (!isChip(chipEl)) return;
-  // 칩에도 contenteditable="false"가 붙어 있어, [contenteditable]로 찾으면 칩 자신이 잡힌다.
-  // 그러면 아래 dispatch가 분리된 노드에서 일어나 미리보기·정답 슬롯이 갱신되지 않는다.
   const editor = chipEl.closest('[contenteditable="true"]');
   chipEl.replaceWith(document.createTextNode(chipEl.dataset.answer || ''));
   if (!editor) return;
   editor.normalize();
   editor.dispatchEvent(new Event('input', { bubbles: true }));
+  if (editor.id) snapshot(editor.id, true);
 }
 
-/** order번째(등장순) 칩 제거 */
 export function chipRemoveByOrder(id, order) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -324,13 +914,11 @@ export function chipRemoveByOrder(id, order) {
   if (chip) chipRemoveEl(chip);
 }
 
-/** 에디터 내 빈칸(칩) 개수 */
 export function chipBlankCount(id) {
   const el = document.getElementById(id);
   return el ? el.querySelectorAll(`.${CHIP_CLASS}`).length : 0;
 }
 
-/** 모든 빈칸(칩) 해제 — 정답을 본문 텍스트로 복구 */
 export function chipRemoveAll(id) {
   const el = document.getElementById(id);
   if (!el) return 0;
@@ -341,10 +929,10 @@ export function chipRemoveAll(id) {
   });
   el.normalize();
   el.dispatchEvent(new Event('input', { bubbles: true }));
+  snapshot(id, true);
   return chips.length;
 }
 
-/** 현재 커서/선택 위치 주변의 칩 제거 (툴바 "빈칸 해제") */
 export function chipRemoveAtCaret(id) {
   const el = document.getElementById(id);
   if (!el) return false;
@@ -363,7 +951,6 @@ export function chipRemoveAtCaret(id) {
       ? node.childNodes[range.startOffset - 1]
       : (isChip(node.childNodes[range.startOffset]) ? node.childNodes[range.startOffset] : null);
   } else if (node.nodeType === 3) {
-    // 텍스트 노드 시작이면 이전 형제, 끝이면 다음 형제 칩
     if (range.startOffset === 0 && isChip(node.previousSibling)) chip = node.previousSibling;
     else if (range.startOffset === node.nodeValue.length && isChip(node.nextSibling)) chip = node.nextSibling;
   }
@@ -376,16 +963,17 @@ export function chipRemoveAtCaret(id) {
   return true;
 }
 
-/** order번째 칩의 정답 갱신 (정답 슬롯 편집과 동기화) */
 export function chipSetAnswer(id, order, answer) {
   const el = document.getElementById(id);
   if (!el) return;
   const chips = [...el.querySelectorAll(`.${CHIP_CLASS}`)];
   const chip = chips[Number(order) - 1];
-  if (chip) setChipText(chip, answer);
+  if (!chip) return;
+  const prev = chip.dataset.answer || '';
+  setChipText(chip, answer);
+  return { prev, next: answer || '', chip };
 }
 
-/** order번째 칩의 동의어 갱신 — 본문 단어는 건드리지 않는다 */
 export function chipSetAliases(id, order, text) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -394,7 +982,6 @@ export function chipSetAliases(id, order, text) {
   if (chip) chip.dataset.aliases = formatAliases(parseAliases(text));
 }
 
-/** order번째 칩으로 스크롤·강조 */
 export function chipJump(id, order) {
   const el = document.getElementById(id);
   if (!el) return false;
@@ -408,7 +995,6 @@ export function chipJump(id, order) {
   return true;
 }
 
-/** 자동 빈칸: 최상위 텍스트 노드에서 토큰 첫 등장을 칩으로 감싼다 */
 export function chipApplyTokens(id, tokens) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -423,6 +1009,7 @@ export function chipApplyTokens(id, tokens) {
   });
 
   el.dispatchEvent(new Event('input', { bubbles: true }));
+  snapshot(id, true);
 }
 
 function wrapFirstOccurrence(el, token) {

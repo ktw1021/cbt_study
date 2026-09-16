@@ -3,7 +3,7 @@
  */
 import { getState, store } from '../core/store.js';
 import { persist, saveState } from '../core/storage.js';
-import { uid, shuffle, stripBlankMarkers, normalizeNewlines } from '../utils/text.js';
+import { uid, shuffle } from '../utils/text.js';
 import { migrateCard } from '../domain/migrate.js';
 import {
   getActiveUser,
@@ -37,8 +37,8 @@ import {
   applyFolderImport,
   usersImportFolderError,
 } from '../services/import-export.js';
-import { saveStudySession, snapshotCurrentCardProgress, getPersistedStudySession, setPersistedStudySession } from '../services/study-session.js';
-import { showSection } from '../ui/router.js';
+import { saveStudySession, snapshotCurrentCardProgress, getPersistedStudySession, setPersistedStudySession, reconcileEditedCardProgress } from '../services/study-session.js';
+import { showSection, confirmLeaveCreate, toggleStudyPrompt } from '../ui/router.js';
 import {
   renderAll,
   renderManageDetail,
@@ -47,13 +47,14 @@ import {
 import {
   readCreateForm,
   makeCreateSnapshot,
+  patchCreateSavedSnapshotMemo,
   renderCreatePreview,
-  renderStudyEditPreview,
-  renderStudyEditForm,
   syncCardFlagPicker,
   writeOutlineToForm,
   readOutlineFromForm,
   syncCreateDeleteButton,
+  updateCreateStudyNav,
+  closeExplanationFocus,
 } from '../ui/create.js';
 import {
   chipMakeBlank,
@@ -66,6 +67,25 @@ import {
   readChipEditor,
   readChipPlainText,
 } from '../ui/chip-editor.js';
+import {
+  handleFormatAction,
+  onEditorShortcut,
+  focusedEditorId,
+  getEditorMeta,
+  updateFootnoteBody,
+  deleteFootnote,
+} from '../ui/editor-surface.js';
+import {
+  applyStudyFontScale,
+  setStudyFontScale,
+  setStudyNotesTab,
+  toggleStudyNotesPanel,
+  toggleStudyFootnote,
+  toggleAllNotesFootnotes,
+  openStudyFootnote,
+  openFootnoteReader,
+} from '../ui/study-notes.js';
+import { saveNoteFootnote as applySaveNoteFootnote, deleteNoteFootnote as applyDeleteNoteFootnote, setNotesField, jumpToNoteFootnote as jumpToPanelFootnote } from '../ui/notes-panel.js';
 import {
   paintInlineBlanks,
   refreshStudyViews,
@@ -88,8 +108,18 @@ import { caretOffsetIn } from '../ui/blank-input.js';
 import { openChoice } from '../ui/choice-modal.js';
 import { openAutoBlankModal, closeModal, getSelectedAutoTokens } from '../ui/modal.js';
 import { openOutlineModal, handleOutlineModalAction, closeOutlineModal } from '../ui/outline-modal.js';
-import { openStudyFolderPicker, openStudyCardPicker, openExportFolderPicker } from '../ui/pickers.js';
+import {
+  openStudyFolderPicker,
+  openStudyCardPicker,
+  openExportFolderPicker,
+} from '../ui/pickers.js';
 import { readFilters } from '../ui/sidebar.js';
+import {
+  getManageVisibleCardIds,
+  getManageFocusIds,
+  clearManageFocus,
+} from '../ui/manage-selection.js';
+import { clickStudyBlankNavTrigger } from '../ui/study-blank-nav.js';
 
 // ── 사용자 · 인증 ──
 
@@ -101,6 +131,15 @@ import {
   showPinSetup, readLoginForm, readRegisterForm, readSetupForm,
   clearAuthInputs, setAuthError, showAuthMessage, setAuthSubmitting,
 } from '../ui/auth.js';
+import {
+  closeAccountSwitcher,
+  renderAccountSwitcher,
+  toggleAccountSwitcherOpen,
+  showAccountSwitchPin,
+  pendingSwitchUserId,
+  readAccountSwitchPin,
+  showAccountSwitchError,
+} from '../ui/account-switcher.js';
 
 async function completeLogin(userId) {
   const state = getState();
@@ -108,11 +147,13 @@ async function completeLogin(userId) {
   if (!user) return false;
 
   const sameUser = store.authenticatedUserId === userId;
-  store.authenticatedUserId = userId;
-  state.activeUserId = userId;
 
   if (!sameUser) {
+    // 아이디를 바꾸기 전에 A의 학습 세션을 저장하고 홈으로. 순서가 바뀌면
+    // B의 세션에 A 큐가 들어가거나, 빈 큐로 B 세션이 지워질 수 있다.
+    showSection('manage', { skipCreateConfirm: true });
     clearUndo();
+    clearManageFocus();
     store.activeFolderId = null;
     store.activeManageId = null;
     state.ui.createDraft = null;
@@ -122,10 +163,20 @@ async function completeLogin(userId) {
     store.studyIndex = 0;
     store._studyCardId = null;
     store.currentBlankStatuses = [];
+    store.currentBlankFocus = null;
+    store.studyAttemptRecorded = false;
+    store.studyRoundRecorded = false;
+    store.studySetupCheckedIds = null;
+    store.studySetupPoolKey = null;
+    store._createStudyReturn = null;
   }
+
+  store.authenticatedUserId = userId;
+  state.activeUserId = userId;
 
   clearAuthInputs();
   showAuthMessage('');
+  closeAccountSwitcher();
   await saveState();
 
   hideAuthOverlay();
@@ -135,6 +186,48 @@ async function completeLogin(userId) {
   }
   renderAll();
   return true;
+}
+
+export function toggleAccountSwitcher() {
+  if (!getActiveUser()) return;
+  toggleAccountSwitcherOpen();
+}
+
+export function pickAccountSwitch(userId) {
+  const current = getActiveUser();
+  const user = getState().users.find((u) => u.id === userId);
+  if (!current || !user) return;
+  if (user.id === current.id) {
+    closeAccountSwitcher();
+    renderAccountSwitcher();
+    return;
+  }
+  if (userNeedsPinSetup(user)) {
+    showAccountSwitchError('이 계정은 비밀번호가 없습니다. 로그아웃 후 설정하세요.');
+    return;
+  }
+  showAccountSwitchPin(user);
+}
+
+export async function confirmAccountSwitch() {
+  const userId = pendingSwitchUserId();
+  const user = getState().users.find((u) => u.id === userId);
+  if (!user) return;
+  const pin = readAccountSwitchPin();
+  if (!validatePin(pin)) {
+    showAccountSwitchError('4자리 숫자 비밀번호를 입력하세요.');
+    return;
+  }
+  if (!verifyPin(pin, user)) {
+    showAccountSwitchError('비밀번호가 일치하지 않습니다.');
+    return;
+  }
+  await completeLogin(user.id);
+}
+
+export function cancelAccountSwitch() {
+  closeAccountSwitcher();
+  renderAccountSwitcher();
 }
 
 /** 저장된 activeUserId로 자동 로그인 (새로고침·재방문) */
@@ -280,7 +373,9 @@ export async function setupUserPin() {
 
 export async function logoutUser() {
   const prevName = getActiveUser()?.name || '';
+  closeAccountSwitcher();
   clearUndo();
+  clearManageFocus();
   store.authenticatedUserId = null;
   getState().activeUserId = null;
   store.activeFolderId = null;
@@ -292,6 +387,7 @@ export async function logoutUser() {
   store.studyIndex = 0;
   store._studyCardId = null;
   store.currentBlankStatuses = [];
+  store._createStudyReturn = null;
   clearAuthInputs();
   if (prevName) {
     const el = document.getElementById('authName');
@@ -338,6 +434,7 @@ export async function deleteUser() {
 
   store.authenticatedUserId = null;
   state.activeUserId = null;
+  store._createStudyReturn = null;
   clearUndo();
   await saveState(null, { allowEmptyUsers: true });
 
@@ -440,14 +537,22 @@ export async function moveFolder(folderId, newParentId) {
 }
 
 export async function dropCardOnFolder(cardId, folderId) {
-  const card = getOwnedCard(cardId);
-  if (!card) return;
+  const dragged = getOwnedCard(cardId);
+  if (!dragged) return;
   const next = folderId || null;
   if (next && !getOwnedFolder(next)) return;
-  if (card.folderId === next) return;
+  const visible = new Set(getManageVisibleCardIds());
+  if (!visible.has(cardId)) return;
+  const focusIds = getManageFocusIds().filter((id) => visible.has(id) && getOwnedCard(id));
+  const ids = focusIds.includes(cardId) && focusIds.length > 1 ? focusIds : [cardId];
+  const needMove = ids.map((id) => getOwnedCard(id)).filter((c) => c && (c.folderId || null) !== next);
+  if (!needMove.length) return;
   pushUndo();
-  card.folderId = next;
-  card.updatedAt = new Date().toISOString();
+  const now = new Date().toISOString();
+  needMove.forEach((c) => {
+    c.folderId = next;
+    c.updatedAt = now;
+  });
   await saveState();
   renderAll();
 }
@@ -462,6 +567,7 @@ function newCardSeedFromContext() {
 
 /** 카드제작 진입(메뉴) — 작성 중 초안이 있으면 이어쓰기, 없으면 빈 폼 */
 export function goCreate() {
+  store._createStudyReturn = null;
   const draft = getState().ui.createDraft;
   renderCreateForm(draft || newCardSeedFromContext());
   showSection('create', { urlExtra: draft?.id ? { cardId: draft.id } : {} });
@@ -479,6 +585,7 @@ function createFormHasWork() {
       || d.explanationText.trim()
       || (d.memo || '').trim()
       || d.blanks.length
+      || (d.footnotes || []).length
       || d.outline?.items?.length
       || (d.title && d.title !== '제목 없음')
     );
@@ -495,6 +602,7 @@ function createDraftHasWork(draft) {
     || String(draft.explanationText || '').trim()
     || String(draft.memo || '').trim()
     || (draft.blanks || []).length
+    || (draft.footnotes || []).length
     || draft.outline?.items?.length
     || (draft.title && draft.title !== '제목 없음')
   );
@@ -516,6 +624,7 @@ export function startNewCard() {
 
   getState().ui.createDraft = null;
   persist();
+  store._createStudyReturn = null;
   // 카드제작 화면에서 다시 「새 카드」→ 완전 초기화. 관리 등에서 진입할 때만 폴더 컨텍스트 반영
   const seed = alreadyOnCreate ? null : newCardSeedFromContext();
   renderCreateForm(seed);
@@ -524,9 +633,10 @@ export function startNewCard() {
   document.getElementById('cardTitle').focus();
 }
 
-export function editCard(id) {
+export function editCard(id, { fromStudy = false } = {}) {
   const c = getOwnedCard(id);
   if (!c) return;
+  if (!fromStudy) store._createStudyReturn = null;
   store.activeManageId = id;
   const draft = getState().ui.createDraft;
   renderCreateForm(draft && draft.id === id ? draft : c);
@@ -538,7 +648,11 @@ export function editCard(id) {
 export function editCurrentStudyCard() {
   const c = store.studyQueue[store.studyIndex];
   if (!c) return alert('학습 중인 카드가 없습니다.');
-  editCard(c.id);
+  store._createStudyReturn = {
+    userId: store.authenticatedUserId,
+    cardId: c.id,
+  };
+  editCard(c.id, { fromStudy: true });
 }
 
 export async function saveCard() {
@@ -589,11 +703,14 @@ async function saveCardWithOptions({ silent = false } = {}) {
   const now = new Date().toISOString();
 
   if (existing) {
+    const previousBlanks = existing.blanks;
     Object.assign(existing, draft, { userId: getActiveUser().id, updatedAt: now, isSample: false });
     store.activeManageId = existing.id;
     if (!existing.author) existing.author = getActiveUser().name;
     existing.originalText = draft.displayText;
     existing.blanks = draft.blanks.map((b) => ({ ...b, cardId: existing.id }));
+    reconcileEditedCardProgress(existing.id, previousBlanks, existing.blanks);
+    store._studyNavCardId = null;
   } else {
     const newId = uid('c');
     const card = migrateCard({
@@ -615,6 +732,7 @@ async function saveCardWithOptions({ silent = false } = {}) {
   store.data.ui.lastSavedAt = new Date().toISOString();
   persist();
   updateCreateSaveStamp();
+  updateCreateStudyNav();
   if (!silent) alert('저장했습니다.');
   showSection('create', { urlExtra: { cardId: store.activeManageId }, replaceUrl: true });
   renderManageDetail(store.activeManageId);
@@ -631,7 +749,7 @@ export async function autoSaveCreate() {
   try {
     const d = readCreateForm();
     const has = d.displayText.trim() || d.explanationText.trim() || (d.memo || '').trim()
-      || d.blanks.length || d.outline?.items?.length
+      || d.blanks.length || (d.footnotes || []).length || d.outline?.items?.length
       || (d.title && d.title !== '제목 없음');
     if (!has) return false;
     getState().ui.createDraft = d;
@@ -646,7 +764,15 @@ export async function autoSaveCreate() {
 
 export function syncCreateSavedSnapshotFromForm() {
   try {
-    store.data.ui.createSavedSnapshot = makeCreateSnapshot(readCreateForm());
+    const id = document.getElementById('cardId')?.value;
+    const saved = id ? getOwnedCard(id) : null;
+    const form = readCreateForm();
+    const draft = getState().ui.createDraft;
+    if (saved && draft && draft.id === saved.id) {
+      store.data.ui.createSavedSnapshot = makeCreateSnapshot(saved);
+    } else {
+      store.data.ui.createSavedSnapshot = makeCreateSnapshot(form);
+    }
     persist();
   } catch { /* ignore */ }
 }
@@ -657,6 +783,7 @@ export async function deleteCurrentCard() {
 
   const deleted = await deleteCardById(id);
   if (!deleted) return;
+  store._createStudyReturn = null;
   getState().ui.createDraft = null;
   persist();
   renderCreateForm(null);
@@ -731,7 +858,6 @@ export function removeAllBlanks(editorId) {
   if (!confirm(`빈칸 ${count}개를 모두 해제할까요?\n정답은 해설 본문으로 돌아갑니다.`)) return;
   chipRemoveAll(editorId);
   if (editorId === 'explanationTemplate') onCreateInput();
-  else if (editorId === 'studyEditExplanation') onStudyEditInput();
 }
 
 export function jumpToBlank(editorId, order) {
@@ -769,7 +895,6 @@ export function confirmQuickAutoBlank(editorId, limit = 5) {
 
   chipApplyTokens(editorId, tokens);
   if (editorId === 'explanationTemplate') onCreateInput();
-  else if (editorId === 'studyEditExplanation') onStudyEditInput();
 }
 
 export function applyAutoBlank() {
@@ -779,7 +904,6 @@ export function applyAutoBlank() {
   chipApplyTokens(editorId, tokens);
   closeModal();
   if (editorId === 'explanationTemplate') onCreateInput();
-  else if (editorId === 'studyEditExplanation') onStudyEditInput();
   alert(`${tokens.length}개 빈칸을 적용했습니다.`);
 }
 
@@ -860,7 +984,7 @@ export function restoreStudySession(index) {
   const sess = getPersistedStudySession();
   if (!sess?.cardIds?.length) return false;
 
-  const cards = sess.cardIds.map((id) => getCard(id)).filter(Boolean);
+  const cards = sess.cardIds.map((id) => getOwnedCard(id)).filter(Boolean);
   if (!cards.length) {
     clearStudySession();
     return false;
@@ -1084,6 +1208,46 @@ export function studyOne(id) {
   showSection('study-play', { urlExtra: { index: 0 } });
 }
 
+/** 카드 수정 헤더 — 학습에서 왔으면 세션 복귀, 아니면 이 저장본 한 장으로 시작 */
+export function goStudyFromCreate() {
+  const id = document.getElementById('cardId')?.value;
+  const saved = id ? getOwnedCard(id) : null;
+  if (!saved) {
+    alert('먼저 카드를 저장하세요.');
+    return;
+  }
+  if (!confirmLeaveCreate()) return;
+
+  const ret = store._createStudyReturn;
+  const resume = !!(ret && ret.userId === store.authenticatedUserId && ret.cardId === saved.id);
+  if (resume) {
+    if (!store.studyQueue.length && !restoreStudySession()) {
+      alert('이어서 학습할 내용이 없습니다.');
+      return;
+    }
+    store._createStudyReturn = null;
+    showSection('study-play', {
+      urlExtra: { index: store.studyIndex },
+      skipCreateConfirm: true,
+    });
+    renderStudyCard();
+    return;
+  }
+
+  const sess = getPersistedStudySession();
+  if (sess?.cardIds?.length && !confirm('진행 중인 학습이 있습니다. 이 카드로 새로 시작할까요?')) return;
+
+  store._createStudyReturn = null;
+  store.studyQueue = [saved];
+  store.studyIndex = 0;
+  store._studyCardId = null;
+  store.currentBlankStatuses = [];
+  saveStudySession({ resetProgress: true });
+  persist();
+  renderStudyCard();
+  showSection('study-play', { urlExtra: { index: 0 }, skipCreateConfirm: true });
+}
+
 /** 빈칸 하나 채점 (Enter / 포커스 이탈 공용) */
 export async function gradeBlank(order, { onlyIfPending = false, focusAfter = order } = {}) {
   const c = store.studyQueue[store.studyIndex];
@@ -1288,37 +1452,38 @@ export async function adjustRounds(delta) {
 }
 
 export async function saveStudyMemo() {
+  const memoVal = document.getElementById('notesMemo')?.value || '';
+  if (store.currentSection === 'create') {
+    const cardId = document.getElementById('cardId')?.value || '';
+    if (!cardId) {
+      alert('먼저 카드를 저장하세요.');
+      return;
+    }
+    const c = getOwnedCard(cardId);
+    if (!c) {
+      alert('먼저 카드를 저장하세요.');
+      return;
+    }
+    pushUndo();
+    c.memo = memoVal;
+    c.updatedAt = new Date().toISOString();
+    const hidden = document.getElementById('cardMemo');
+    if (hidden) hidden.value = memoVal;
+    patchCreateSavedSnapshotMemo(memoVal);
+    const draft = getState().ui.createDraft;
+    if (draft && draft.id === cardId) draft.memo = memoVal;
+    await persist();
+    alert('메모 저장됐습니다.');
+    return;
+  }
   const c = store.studyQueue[store.studyIndex];
   if (!c) return;
   pushUndo();
-  c.memo = document.getElementById('studyMemo').value;
+  c.memo = memoVal;
   c.updatedAt = new Date().toISOString();
   await saveState();
   renderAll();
   document.getElementById('gradeResult').textContent = '메모 저장됐습니다.';
-}
-
-export async function saveStudyEdits() {
-  const c = store.studyQueue[store.studyIndex];
-  if (!c) return;
-  const synced = readChipEditor('studyEditExplanation');
-  const emptyAnswer = synced.blanks.find((b) => !String(b.answer).trim());
-  if (emptyAnswer) return alert(`빈칸 ${emptyAnswer.order}의 정답이 비어 있습니다. 정답을 채우거나 빈칸을 해제하세요.`);
-  pushUndo();
-  c.title = document.getElementById('studyEditTitle').value.trim() || c.title;
-  c.folderId = document.getElementById('studyEditFolder').value || null;
-  c.displayText = normalizeNewlines(stripBlankMarkers(document.getElementById('studyEditPrompt').value));
-  c.originalText = c.displayText;
-  c.explanationText = synced.template;
-  c.blanks = synced.blanks.map((b) => ({ ...b, cardId: c.id }));
-  c.memo = document.getElementById('studyEditMemo').value;
-  c.updatedAt = new Date().toISOString();
-  await persist();
-  if (document.getElementById('cardId').value === c.id) renderCreateForm(c);
-  if (store.activeManageId === c.id) renderManageDetail(c.id);
-  renderAll();
-  renderStudyCard();
-  alert('원본 카드에 저장했습니다.');
 }
 
 export function prevCard() {
@@ -1507,20 +1672,10 @@ async function importUsers(kind, data) {
 
 /** 카드 제작 해설 칩 에디터가 바뀜 → 미리보기·정답 슬롯 재구성 */
 export function onCreateInput() {
-  const { template, blanks } = readChipEditor('explanationTemplate');
-  renderCreatePreview({
-    displayText: normalizeNewlines(document.getElementById('promptTemplate').value),
-    explanationText: template,
-    blanks,
-  });
+  renderCreatePreview(readCreateForm());
 }
 
-/** 학습 중 수정 해설 칩 에디터가 바뀜 → 미리보기·정답 슬롯 재구성 */
-export function onStudyEditInput() {
-  renderStudyEditForm(null, readChipEditor('studyEditExplanation'));
-}
-
-export { focusBlankUI as focusBlank, renderStudyEditPreview };
+export { focusBlankUI as focusBlank, clickStudyBlankNavTrigger };
 export {
   handleBlankPeekOver,
   handleBlankPeekOut,
@@ -1528,4 +1683,75 @@ export {
   armBlankPeekSticky,
   retainBlankPeekAfterEdit,
   resetBlankGradeIfEdited,
+};
+
+export function openFootnoteFromMarker(btn) {
+  const fnId = btn?.dataset?.fnId;
+  if (!fnId) return;
+  if (btn.closest('#studyPrompt, #studyExplanation, #notesPanel, #studyNotesMount')) {
+    openStudyFootnote(fnId);
+    return;
+  }
+  if (btn.closest('#promptPreview, #explanationPreview, #createSection, #promptTemplate, #explanationTemplate')) {
+    openStudyFootnote(fnId);
+    return;
+  }
+  if (btn.closest('#manageDetail, #manageSection')) {
+    const c = getOwnedCard(store.activeManageId);
+    if (c) openFootnoteReader(c, fnId);
+  }
+}
+
+export function editFootnoteFromMarker(editorId, fnId) {
+  const fn = getEditorMeta(editorId).footnotes.find((f) => f.id === fnId);
+  if (!fn) return;
+  const next = window.prompt('각주 수정. 비우면 삭제합니다.', fn?.body || '');
+  if (next == null) return;
+  if (!String(next).trim()) {
+    if (!window.confirm('각주를 삭제하시겠습니까?')) return;
+    deleteFootnote(editorId, fnId);
+  }
+  else updateFootnoteBody(editorId, fnId, String(next));
+  if (editorId === 'promptTemplate' || editorId === 'explanationTemplate') onCreateInput();
+}
+
+export function onFormatToolbar(action, editorId, extra = {}) {
+  handleFormatAction(action, editorId, extra);
+  if (editorId === 'promptTemplate' || editorId === 'explanationTemplate') onCreateInput();
+}
+
+export function handleEditorShortcut(e) {
+  const id = focusedEditorId();
+  if (!id) return false;
+  return onEditorShortcut(e, id);
+}
+
+export function onStudyFontScale(value) {
+  setStudyFontScale(value);
+}
+
+export function saveNoteFootnote(fnId, field) {
+  const changed = applySaveNoteFootnote(fnId, field);
+  if (changed && store._notesHost === 'create') onCreateInput();
+}
+
+export function deleteNoteFootnote(fnId, field) {
+  const changed = applyDeleteNoteFootnote(fnId, field);
+  if (changed && store._notesHost === 'create') onCreateInput();
+}
+
+export function jumpToNoteFootnote(fnId, field) {
+  if (store._notesHost === 'create' && field === 'display') closeExplanationFocus();
+  if (store._notesHost !== 'create' && field === 'display' && document.body.classList.contains('study-prompt-collapsed')) toggleStudyPrompt();
+  jumpToPanelFootnote(fnId, field);
+}
+
+export {
+  setStudyNotesTab,
+  setNotesField,
+  toggleStudyNotesPanel,
+  toggleStudyFootnote,
+  toggleAllNotesFootnotes,
+  openStudyFootnote,
+  applyStudyFontScale,
 };

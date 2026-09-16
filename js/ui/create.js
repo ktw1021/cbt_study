@@ -1,7 +1,6 @@
-import { escapeHtml, stripBlankMarkers, normalizeTight, normalizeNewlines } from '../utils/text.js';
+import { escapeHtml, stripBlankMarkers, normalizeTight, normalizeNewlines, blankShapeHint } from '../utils/text.js';
 import { syncTemplateAndBlanks } from '../domain/blank.js';
 import { normalizeOutline, extractOutlineBlankToken } from '../domain/outline.js';
-import { formatProblemHtml, formatPromptHtml } from './prompt.js';
 import { store } from '../core/store.js';
 import { persist } from '../core/storage.js';
 import {
@@ -9,8 +8,11 @@ import {
   readChipEditor,
   formatAliases,
 } from './chip-editor.js';
+import { formatToolbarHtml, loadPairedEditors, readAllEditorMeta } from './editor-surface.js';
+import { renderMarkedHtml, renderTemplateHtml } from './mark-render.js';
+import { placeNotesPanel, writeNotesMemo, readNotesMemo, renderNotesPanel, resetCreateNotesDefaults, footnotesForCreateForm } from './notes-panel.js';
 
-const BLANK_EDITORS = new Set(['explanationTemplate', 'studyEditExplanation']);
+const BLANK_EDITORS = new Set(['explanationTemplate']);
 
 /** 플래그 스와치 선택 상태 동기화 (hidden input + active 표시) */
 export function syncCardFlagPicker(value) {
@@ -149,16 +151,28 @@ export function closeExplanationFocus() {
 
 /** 카드 제작 폼 렌더 */
 export function renderCreateForm(card) {
+  resetCreateNotesDefaults();
   document.getElementById('cardId').value = card?.id || '';
   document.getElementById('cardTitle').value = card?.title || '';
   document.getElementById('cardFolder').value = card?.folderId || '';
   syncCardFlagPicker(card?.flagColor ?? 0);
-  document.getElementById('promptTemplate').value = normalizeNewlines(stripBlankMarkers(card?.displayText || ''));
-  setChipEditorContent('explanationTemplate', card?.explanationText || '', card?.blanks || []);
-  document.getElementById('cardMemo').value = card?.memo || '';
+  ensureFormatToolbar('promptTemplate', false);
+  ensureFormatToolbar('explanationTemplate', false);
+  setChipEditorContent('promptTemplate', normalizeNewlines(stripBlankMarkers(card?.displayText || '')), [], { resetHistory: false });
+  setChipEditorContent('explanationTemplate', card?.explanationText || '', card?.blanks || [], { resetHistory: false });
+  loadPairedEditors(card || {}, ['promptTemplate', 'explanationTemplate']);
   writeOutlineToForm(card?.outline || null);
+  writeNotesMemo(card?.memo || '');
+  placeNotesPanel('create');
+  renderNotesPanel();
   renderCreatePreview(card || { displayText: '', explanationText: '', blanks: [] });
   syncCreateDeleteButton(!!card?.id);
+  updateCreateStudyNav();
+  if (card?.id) {
+    try {
+      store.data.ui.createSavedSnapshot = makeCreateSnapshot(readCreateForm());
+    } catch { /* DOM 미준비 */ }
+  }
 }
 
 /** 저장된 카드만 삭제 가능 */
@@ -180,12 +194,38 @@ function aliasInputHtml(b, editorId) {
     value="${value}" placeholder="동의어 (여러 개는 || 로 구분)" title="이렇게 써도 정답으로 인정합니다">`;
 }
 
+function ensureFormatToolbar(editorId, blanks) {
+  const el = document.getElementById(editorId);
+  if (!el) return;
+  if (el.previousElementSibling?.classList.contains('fmt-toolbar')) return;
+  el.insertAdjacentHTML('beforebegin', formatToolbarHtml(editorId, { blanks }));
+}
+
 /** 카드 제작 미리보기 — 빈칸 단어는 드래그한 그대로(읽기 전용) */
 export function renderCreatePreview(data) {
-  document.getElementById('promptPreview').innerHTML = formatProblemHtml(data.displayText || '');
+  const meta = data?.textMarks || data?.footnotes
+    ? data
+    : (data?.id ? data : { ...data, ...readAllEditorMeta() });
+  const display = meta.displayText || '';
+  document.getElementById('promptPreview').innerHTML = display.trim()
+    ? renderMarkedHtml(display, {
+      marks: meta.textMarks?.display,
+      footnotes: meta.footnotes,
+      field: 'display',
+    })
+    : '<span class="empty">문제가 없습니다.</span>';
 
   const synced = syncTemplateAndBlanks(data.explanationText || '', data.blanks || []);
-  document.getElementById('explanationPreview').innerHTML = formatPromptHtml(synced.template, synced.blanks);
+  document.getElementById('explanationPreview').innerHTML = renderTemplateHtml(synced.template, synced.blanks, {
+    marks: meta.textMarks?.explanation,
+    footnotes: meta.footnotes,
+    field: 'explanation',
+    renderAtom: (atom) => {
+      const b = synced.blanks.find((x) => x.order === atom.order);
+      const hint = blankShapeHint(b?.answer || '');
+      return `<span class="blank-inline blank-shape">빈칸 ${atom.order} ${escapeHtml(hint)}</span>`;
+    },
+  }) || '<span class="empty">내용 없음</span>';
   document.getElementById('blankSummary').innerHTML = synced.blanks.length
     ? synced.blanks.map((b) => `
       <span class="blank-chip-wrap">
@@ -207,12 +247,14 @@ export function renderCreatePreview(data) {
     : '<div class="caption">해설에서 단어를 드래그해 빈칸을 만들면 여기에 표시됩니다.</div>';
 
   renderOutlineSummary(readOutlineFromForm(), { blanks: synced.blanks });
+  if (document.getElementById('notesPanel')?.dataset?.notesHost === 'create') renderNotesPanel();
 }
 
 /** 폼에서 카드 draft 읽기 (정답·빈칸은 칩 에디터가 단일 출처) */
 export function readCreateForm() {
-  const problem = normalizeNewlines(stripBlankMarkers(document.getElementById('promptTemplate').value));
+  const problem = normalizeNewlines(stripBlankMarkers(readChipEditor('promptTemplate').template));
   const { template, blanks } = readChipEditor('explanationTemplate');
+  const meta = readAllEditorMeta();
   return {
     id: document.getElementById('cardId').value,
     folderId: document.getElementById('cardFolder').value || null,
@@ -220,9 +262,11 @@ export function readCreateForm() {
     displayText: problem,
     explanationText: template,
     blanks,
-    memo: document.getElementById('cardMemo').value,
+    memo: readNotesMemo(),
     flagColor: Number(document.getElementById('cardFlag').value),
     outline: readOutlineFromForm(),
+    textMarks: meta.textMarks,
+    footnotes: footnotesForCreateForm(),
   };
 }
 
@@ -250,38 +294,54 @@ export function makeCreateSnapshot(draft) {
       answer: String(b.answer || ''),
       aliases: b.aliases || [],
     })),
+    textMarks: {
+      display: d.textMarks?.display || [],
+      explanation: d.textMarks?.explanation || [],
+    },
+    footnotes: (d.footnotes || []).map((f) => ({
+      field: f.field, start: f.start, end: f.end, body: String(f.body || ''),
+    })),
   });
 }
 
-/** 학습 중 수정 폼 */
-export function renderStudyEditForm(card, syncedOverride = null) {
-  if (!card && !syncedOverride) return;
-
-  if (card) {
-    document.getElementById('studyEditTitle').value = card.title;
-    document.getElementById('studyEditFolder').value = card.folderId || '';
-    document.getElementById('studyEditPrompt').value = stripBlankMarkers(card.displayText || '');
-    setChipEditorContent('studyEditExplanation', card.explanationText || '', card.blanks || []);
-    document.getElementById('studyEditMemo').value = card.memo || '';
+export function isCreateFormDirty() {
+  try {
+    const d = readCreateForm();
+    const snap = makeCreateSnapshot(d);
+    const base = String(store.data.ui.createSavedSnapshot || '');
+    if (base) return snap !== base;
+    return !!(d.displayText.trim() || d.explanationText.trim() || (d.memo || '').trim()
+      || d.blanks.length || d.outline?.items?.length
+      || (d.footnotes || []).length
+      || (d.title && d.title !== '제목 없음'));
+  } catch {
+    return false;
   }
-
-  const synced = syncedOverride || readChipEditor('studyEditExplanation');
-
-  document.getElementById('studyEditExplanationPreview').innerHTML = formatPromptHtml(synced.template, synced.blanks);
-  document.getElementById('studyEditSlots').innerHTML = synced.blanks.length
-    ? synced.blanks.map((b) => `
-      <div class="slot blank-slot">
-        <div class="between" style="margin-bottom:4px">
-          <label>빈칸 ${b.order}</label>
-          <button type="button" class="ghost small" data-action="remove-blank-order" data-editor="studyEditExplanation" data-order="${b.order}">해제</button>
-        </div>
-        <div class="answer-readonly">${escapeHtml(b.answer) || '<span class="empty">(단어 없음)</span>'}</div>
-        ${aliasInputHtml(b, 'studyEditExplanation')}
-      </div>`).join('')
-    : '<div class="caption">해설에서 단어를 드래그해 빈칸을 만드세요.</div>';
 }
 
-export function renderStudyEditPreview() {
-  const synced = readChipEditor('studyEditExplanation');
-  document.getElementById('studyEditExplanationPreview').innerHTML = formatPromptHtml(synced.template, synced.blanks);
+export function updateCreateStudyNav() {
+  const btn = document.getElementById('createStudyNavBtn');
+  if (!btn) return;
+  const id = document.getElementById('cardId')?.value || '';
+  const ret = store._createStudyReturn;
+  const resume = !!(ret && ret.userId === store.authenticatedUserId && ret.cardId && ret.cardId === id);
+  btn.textContent = resume ? '이어서 학습하기' : '학습하러 가기';
+  btn.classList.toggle('create-study-nav--resume', resume);
+  btn.classList.toggle('create-study-nav--go', !resume);
+}
+
+/** createSavedSnapshot JSON의 memo만 갱신 — 본문 등 다른 dirty baseline 필드는 유지 */
+export function patchCreateSavedSnapshotMemo(memo) {
+  const base = store.data.ui.createSavedSnapshot;
+  if (!base) {
+    try {
+      store.data.ui.createSavedSnapshot = makeCreateSnapshot(readCreateForm());
+    } catch { /* ignore */ }
+    return;
+  }
+  try {
+    const o = JSON.parse(base);
+    o.memo = memo || '';
+    store.data.ui.createSavedSnapshot = JSON.stringify(o);
+  } catch { /* ignore */ }
 }
